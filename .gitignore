@@ -1,0 +1,24 @@
+# Local Python / DB runtime
+backend/data/*.db
+backend/data/*.db-wal
+backend/data/*.db-shm
+**/__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# Frontend dependencies & build
+frontend/node_modules/
+frontend/dist/
+vendor/
+
+# Local environment & Vercel
+.env
+.env.*
+!.env.example
+.vercel/
+*.log
+
+# Sample 12-month import templates (keep New HE_THONG_TIEN_LUONG_KPI_V20_AGRIBANK_CHUAN.xlsm for initial seed)
+FILE_MAU_CHUAN_*.xlsx
+
