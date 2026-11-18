@@ -19,13 +19,26 @@ _db_initialized = False
 
 
 def ensure_database_initialized():
-    """Khởi tạo schema & nạp dữ liệu gốc an toàn, tránh introspect lại toàn bộ bảng khi DB đã sẵn sàng."""
+    """Khởi tạo schema & nạp dữ liệu gốc an toàn, tự động migrate các cột mới nếu thiếu."""
     global _db_initialized
     if _db_initialized:
         return
     with _init_lock:
         if _db_initialized:
             return
+        
+        # Tự động migrate các cột mới nếu thiếu trên CSDL đang chạy (audit_logs.ip_address, user_agent)
+        try:
+            with engine.connect() as conn:
+                for col_name, col_type in [("ip_address", "VARCHAR(45)"), ("user_agent", "VARCHAR(255)")]:
+                    try:
+                        conn.execute(text(f"ALTER TABLE audit_logs ADD COLUMN {col_name} {col_type}"))
+                        conn.commit()
+                    except Exception:
+                        pass
+        except Exception:
+            pass
+
         try:
             with engine.connect() as conn:
                 if conn.execute(text("SELECT 1 FROM system_config LIMIT 1")).first() is not None:
