@@ -16,6 +16,10 @@ from app.main import app
 from app.seed_from_excel import seed_database_if_empty
 from app.engine import compute_period_kpi_and_payroll, compute_accumulation_v3
 from app.excel_io import build_template_salary_excel, build_template_targets_excel
+from app.models import (
+    Employee, Indicator, KpiErrorCode, Period, SystemConfig,
+    SalaryImportRow, TargetExecutionRow, MonthlyHistorySnapshot, ViolationRecord
+)
 
 
 class TestAgribankKpi3P(unittest.TestCase):
@@ -416,6 +420,7 @@ class TestAgribankKpi3P(unittest.TestCase):
         repo_root = BACKEND_ROOT.parent
         # 1. File cấu hình Vercel JSON hợp lệ & entry api/index.py import được
         vercel_cfg = json.loads((repo_root / "vercel.json").read_text(encoding="utf-8"))
+        self.assertEqual(vercel_cfg["regions"], ["sin1"])
         self.assertEqual(vercel_cfg["outputDirectory"], "frontend/dist")
         self.assertTrue((repo_root / "requirements.txt").exists())
         self.assertTrue((repo_root / "api" / "index.py").exists())
@@ -442,14 +447,14 @@ class TestAgribankKpi3P(unittest.TestCase):
             "postgresql+psycopg://u:p@host/db?sslmode=require&channel_binding=require",
         )
 
-        # 3. Ẩn danh sách cán bộ khi tắt PUBLIC_STAFF_DIRECTORY (mặc định khi public trên Vercel)
-        r_dir_on = self.client.get("/api/auth/staff-directory")
-        self.assertEqual(r_dir_on.status_code, 200)
-        self.assertGreater(len(r_dir_on.json()), 0)
-        with patch("app.routers.auth.PUBLIC_STAFF_DIRECTORY", False):
-            r_dir_off = self.client.get("/api/auth/staff-directory")
-            self.assertEqual(r_dir_off.status_code, 200)
-            self.assertEqual(r_dir_off.json(), [])
+        # 3. Ẩn danh sách cán bộ khi tắt PUBLIC_STAFF_DIRECTORY (mặc định an toàn)
+        r_dir_default = self.client.get("/api/auth/staff-directory")
+        self.assertEqual(r_dir_default.status_code, 200)
+        self.assertEqual(r_dir_default.json(), [])
+        with patch("app.routers.auth.PUBLIC_STAFF_DIRECTORY", True):
+            r_dir_on = self.client.get("/api/auth/staff-directory")
+            self.assertEqual(r_dir_on.status_code, 200)
+            self.assertGreater(len(r_dir_on.json()), 0)
 
         # 4. Fail-closed trên Vercel khi thiếu DATABASE_URL hoặc AGRIBANK_KPI_JWT_SECRET
         base_env = {k: v for k, v in os.environ.items() if k not in ("DATABASE_URL", "POSTGRES_URL", "AGRIBANK_KPI_JWT_SECRET", "JWT_SECRET", "VERCEL")}
@@ -487,6 +492,295 @@ class TestAgribankKpi3P(unittest.TestCase):
         )
         self.assertEqual(p_ok.returncode, 0, p_ok.stderr)
         self.assertIn("True False False ['https://demo.vercel.app']", p_ok.stdout)
+
+    def test_08_demo_only_seed_anonymized(self):
+        from app.models import Employee, Indicator, KpiErrorCode, SalaryImportRow, TargetExecutionRow, MonthlyHistorySnapshot
+
+        with tempfile.TemporaryDirectory() as td:
+            db_f = Path(td) / "demo.db"
+            eng = create_engine(f"sqlite:///{db_f.as_posix()}", connect_args={"check_same_thread": False})
+            Base.metadata.create_all(bind=eng)
+            Sess = sessionmaker(autocommit=False, autoflush=False, bind=eng)
+            s = Sess()
+            try:
+                self.assertTrue(seed_database_if_empty(s, demo_only=True))
+                emps = s.query(Employee).order_by(Employee.sort_order.asc()).all()
+                self.assertEqual(len(emps), 5)
+                self.assertEqual([e.emp_code for e in emps], ["DEMO001", "DEMO002", "DEMO003", "DEMO004", "DEMO005"])
+                self.assertEqual(emps[0].emp_code, "DEMO001")
+                self.assertEqual(emps[0].full_name, "Nguyễn Văn An")
+                self.assertEqual(emps[0].base_v1, 14000000.0)
+                self.assertEqual(emps[0].base_v2, 15000000.0)
+                self.assertEqual(emps[1].emp_code, "DEMO002")
+                self.assertEqual(emps[1].full_name, "Trần Thị Bình")
+                self.assertEqual(emps[2].emp_code, "DEMO003")
+                self.assertEqual(emps[2].full_name, "Lê Văn Cường")
+                self.assertEqual(emps[3].emp_code, "DEMO004")
+                self.assertEqual(emps[3].full_name, "Phạm Thị Dung")
+                self.assertEqual(emps[4].emp_code, "DEMO005")
+                self.assertEqual(emps[4].full_name, "Hoàng Văn Em")
+                self.assertGreaterEqual(s.query(Indicator).count(), 8)
+                self.assertGreater(s.query(KpiErrorCode).count(), 1000)
+                self.assertEqual(s.query(SalaryImportRow).count(), 60)
+                self.assertEqual(s.query(TargetExecutionRow).count(), 60 * s.query(Indicator).count())
+                self.assertEqual(s.query(MonthlyHistorySnapshot).count(), 45)
+                for m in range(1, 13):
+                    calc = compute_period_kpi_and_payroll(s, f"2026-{m:02d}")
+                    self.assertEqual(calc["totals"]["staff_count"], 5)
+                    ranks = [r["rating"] for r in calc["payroll_rows"]]
+                    self.assertEqual(ranks, ["A+", "A", "A", "B", "C"])
+                    self.assertEqual(calc["totals"]["diff_ns"], 0)
+                    self.assertGreater(calc["payroll_rows"][0]["diff_ns"], 0)
+                    self.assertLess(calc["payroll_rows"][4]["diff_ns"], 0)
+                    self.assertGreater(calc["totals"]["v2_surplus"], 0)
+                v3_demo = compute_accumulation_v3(s, 2026, include_open_period=True)
+                self.assertEqual(v3_demo["totals"]["staff_count"], 5)
+                self.assertGreater(v3_demo["totals"]["v2_qt"], 0)
+            finally:
+                s.close()
+                eng.dispose()
+
+    def test_09_backend_verified_audit_fixes(self):
+        from app.auth import verify_password, hash_password
+
+        # 1. Unknown /api/* route returns 404, not 200
+        r_404 = self.client.get("/api/non-existent-endpoint-audit-test")
+        self.assertEqual(r_404.status_code, 404)
+        self.assertIn("API endpoint not found", r_404.json().get("detail", ""))
+
+        # 2. Plaintext password rejected; PBKDF2 hash accepted
+        self.assertFalse(verify_password("123456", "123456"))
+        hashed = hash_password("123456")
+        self.assertTrue(verify_password("123456", hashed))
+
+        # 3. Formula checks: TIER_MATRIX tier bonus retention & dynamic surplus label
+        db = self.SessionTest()
+        try:
+            # Test TIER_MATRIX preserves ki > 1.0
+            calc_matrix = compute_period_kpi_and_payroll(
+                db,
+                "2026-10",
+                config_override={"tcv_mode": "TIER_MATRIX", "tcv_max_cap": 1.0},
+                tiers_override=[
+                    {"code": "A+", "min_score": 90, "max_score": 120, "ki_month": 1.05, "kq_settlement": 1.1, "h3_v3": 1.1},
+                    {"code": "A", "min_score": 80, "max_score": 90, "ki_month": 1.0, "kq_settlement": 1.0, "h3_v3": 1.0},
+                    {"code": "B", "min_score": 70, "max_score": 80, "ki_month": 0.9, "kq_settlement": 0.9, "h3_v3": 0.9},
+                    {"code": "C", "min_score": 60, "max_score": 70, "ki_month": 0.8, "kq_settlement": 0.8, "h3_v3": 0.8},
+                    {"code": "D", "min_score": 0, "max_score": 60, "ki_month": 0.7, "kq_settlement": 0.7, "h3_v3": 0.7},
+                ],
+            )
+            a_plus_row = next(r for r in calc_matrix["kpi_rows"] if r["rating"] == "A+")
+            self.assertGreater(a_plus_row["tcv"], 1.0)
+
+            # Test dynamic V2 deficit label
+            calc_deficit = compute_period_kpi_and_payroll(
+                db,
+                "2026-10",
+                config_override={"v2_monthly_fund": 50000000.0, "v2_fund_mode": "MANUAL"},
+            )
+            v2_item = next(x for x in calc_deficit["dashboard"]["salary_structure"] if "dôi dư" in x["label"] or "thâm hụt" in x["label"])
+            self.assertIn("thâm hụt", v2_item["label"])
+
+            # Test V1_V2_PLUS_DIFF non-negative takehome clamp
+            calc_clamp = compute_period_kpi_and_payroll(
+                db,
+                "2026-10",
+                config_override={"monthly_takehome_mode": "V1_V2_PLUS_DIFF"},
+            )
+            for r in calc_clamp["payroll_rows"]:
+                self.assertGreaterEqual(r["takehome"], 0.0)
+
+            # Test rounding residual compensation equals total qns_fund
+            calc_res = compute_period_kpi_and_payroll(
+                db,
+                "2026-10",
+                config_override={"rounding_residual_to_last": True, "qns_mode": "MANUAL", "qns_manual_amount": 100000000.0},
+            )
+            self.assertEqual(sum(r["nsi"] for r in calc_res["payroll_rows"]), 100000000.0)
+        finally:
+            db.close()
+
+    def test_10_data_audit_verified_fixes(self):
+        from app.excel_io import sanitize_excel_cell
+        admin_token = self._login_admin()
+        headers = {"Authorization": f"Bearer {admin_token}"}
+
+        # 1. sanitize_excel_cell prepends single quote on formula characters
+        self.assertEqual(sanitize_excel_cell("=1+1"), "'=1+1")
+        self.assertEqual(sanitize_excel_cell("+cmd|' /C calc'!A0"), "'+cmd|' /C calc'!A0")
+        self.assertEqual(sanitize_excel_cell("@SUM(A1:A10)"), "'@SUM(A1:A10)")
+        self.assertEqual(sanitize_excel_cell("-100"), "'-100")
+        self.assertEqual(sanitize_excel_cell("Nguyen Van A"), "Nguyen Van A")
+        self.assertEqual(sanitize_excel_cell(12345), 12345)
+
+        # 2. update_tich_luy_cell rejects mutation on locked month (T01 is locked)
+        r_locked = self.client.put(
+            "/api/payroll/tich-luy-v3/cell",
+            json={"year_num": 2026, "month_num": 1, "emp_code": "3800207001465", "kpi_score": 99.0},
+            headers=headers,
+        )
+        self.assertEqual(r_locked.status_code, 400)
+        self.assertIn("Không thể chỉnh sửa dữ liệu kỳ đã khóa", r_locked.json().get("detail", ""))
+
+        # 3. recalculate_history_from_dataset rejects when period lacks detailed salary/target rows
+        r_recalc = self.client.post(
+            "/api/operations/dataset/recalculate-history?period_code=2026-01",
+            headers=headers,
+        )
+        self.assertEqual(r_recalc.status_code, 400)
+        self.assertIn("Thiếu dữ liệu chi tiết của kỳ để tính lại", r_recalc.json().get("detail", ""))
+
+    def test_11_turnover_inactive_employee_preservation_in_v3(self):
+        """Kiểm tra cán bộ thôi việc/luân chuyển giữa năm (is_active=False) vẫn được bảo toàn trong quyết toán V3."""
+        db = self.SessionTest()
+        try:
+            # 1. Đặt 1 nhân viên sang is_active = False (ví dụ cán bộ 3800207001465 đã có snapshot T1..T9)
+            emp = db.query(Employee).filter(Employee.emp_code == "3800207001465").first()
+            self.assertIsNotNone(emp)
+            emp.is_active = False
+            db.commit()
+
+            # 2. Tính tích lũy V3
+            v3 = compute_accumulation_v3(db, 2026, include_open_period=False)
+
+            # 3. Xác thực nhân viên vẫn có trong kết quả
+            emp_v3 = next((r for r in v3["rows"] if r["emp_code"] == "3800207001465"), None)
+            self.assertIsNotNone(emp_v3, "Cán bộ thôi việc bị loại khỏi danh sách quyết toán V3!")
+            self.assertGreaterEqual(emp_v3["months_active"], 9)
+            self.assertGreater(emp_v3["v2_received"], 0)
+            self.assertGreater(emp_v3["v3_amount"], 0)
+        finally:
+            emp = db.query(Employee).filter(Employee.emp_code == "3800207001465").first()
+            if emp:
+                emp.is_active = True
+                db.commit()
+            db.close()
+
+    def test_12_missing_salary_import_record_defaults_to_zero_workdays(self):
+        """Kiểm tra nhân sự thiếu bản ghi import lương nhận công = 0 và gắn cảnh báo."""
+        db = self.SessionTest()
+        try:
+            # Xóa tạm bản ghi lương của 1 cán bộ trong kỳ 2026-10
+            row = db.query(SalaryImportRow).filter(
+                SalaryImportRow.period_code == "2026-10",
+                SalaryImportRow.emp_code == "3800207001465"
+            ).first()
+            saved_data = None
+            if row:
+                saved_data = {
+                    "period_code": row.period_code,
+                    "emp_code": row.emp_code,
+                    "full_name": row.full_name,
+                    "title": row.title,
+                    "department": row.department,
+                    "group_name": row.group_name,
+                    "labor_type": row.labor_type,
+                    "hsl_v1": row.hsl_v1,
+                    "base_v1": row.base_v1,
+                    "base_v2": row.base_v2,
+                    "actual_workdays": row.actual_workdays,
+                    "status": row.status,
+                }
+                db.delete(row)
+                db.commit()
+
+            payroll = compute_period_kpi_and_payroll(db, "2026-10")
+            p_row = next(r for r in payroll["payroll_rows"] if r["emp_code"] == "3800207001465")
+            self.assertEqual(p_row["actual_workdays"], 0.0)
+            self.assertTrue(p_row["missing_attendance"])
+            self.assertIn("Thiếu dữ liệu", p_row["warning"])
+            self.assertEqual(p_row["v1_actual"], 0.0)
+            self.assertTrue(any("3800207001465" in w for w in payroll.get("warnings", [])))
+        finally:
+            if saved_data:
+                db.add(SalaryImportRow(**saved_data))
+                db.commit()
+            db.close()
+
+    def test_13_negative_values_clamp_and_zero_workdays(self):
+        """Kiểm tra hàm chặn sàn max(0.0) chống điểm âm."""
+        db = self.SessionTest()
+        try:
+            # Gán số liệu thực hiện âm cho một chỉ tiêu
+            tgt = db.query(TargetExecutionRow).filter(
+                TargetExecutionRow.period_code == "2026-10",
+                TargetExecutionRow.emp_code == "3800207001465"
+            ).first()
+            orig_val = tgt.actual_value if tgt else 0.0
+            if tgt:
+                tgt.actual_value = -500.0
+                db.commit()
+
+            payroll = compute_period_kpi_and_payroll(db, "2026-10")
+            p_row = next(r for r in payroll["payroll_rows"] if r["emp_code"] == "3800207001465")
+            self.assertGreaterEqual(p_row["kpi_score"], 0.0)
+            self.assertGreaterEqual(p_row["workday_ratio"], 0.0)
+
+            # Khôi phục
+            if tgt:
+                tgt.actual_value = orig_val
+                db.commit()
+        finally:
+            db.close()
+
+    def test_14_pydantic_validation_boundaries(self):
+        """Kiểm tra chặn HTTP 422 và HTTP 400 khi dữ liệu đầu vào vượt giới hạn."""
+        admin_token = self._login_admin()
+        headers = {"Authorization": f"Bearer {admin_token}"}
+
+        # 1. Thử cập nhật ngày công > 31 (chặn 422)
+        res_high_wd = self.client.put(
+            "/api/operations/salary-row?period_code=2026-10&emp_code=3800207001465",
+            json={"actual_workdays": 35.0},
+            headers=headers,
+        )
+        self.assertEqual(res_high_wd.status_code, 422)
+
+        # 2. Thử cập nhật ngày công < 0 (chặn 422)
+        res_neg_wd = self.client.put(
+            "/api/operations/salary-row?period_code=2026-10&emp_code=3800207001465",
+            json={"actual_workdays": -5.0},
+            headers=headers,
+        )
+        self.assertEqual(res_neg_wd.status_code, 422)
+
+        # 3. Thử cập nhật lương âm (chặn 422)
+        res_neg_sal = self.client.put(
+            "/api/operations/salary-row?period_code=2026-10&emp_code=3800207001465",
+            json={"base_v1": -1000000.0},
+            headers=headers,
+        )
+        self.assertEqual(res_neg_sal.status_code, 422)
+
+        # 4. Thử cập nhật trọng số âm (chặn 400)
+        res_cfg = self.client.put(
+            "/api/admin/config",
+            json={"w_cm": -0.2, "w_kpi": 0.8, "w_reserve": 0.4},
+            headers=headers,
+        )
+        self.assertEqual(res_cfg.status_code, 400)
+        self.assertIn("Trọng số w_cm phải nằm trong khoảng", res_cfg.json().get("detail", ""))
+
+    def test_15_n_plus_one_dataset_commit_efficiency(self):
+        """Kiểm tra tính chính xác và thời gian thực thi của bulk pre-fetch I/O."""
+        import time
+        from app.excel_io import commit_salary_dataset, commit_targets_dataset
+        with open("FILE_MAU_CHUAN_IMPORT_LUONG_12_THANG.xlsx", "rb") as f:
+            sal_bytes = f.read()
+        with open("FILE_MAU_CHUAN_IMPORT_CHI_TIEU_12_THANG.xlsx", "rb") as f:
+            tgt_bytes = f.read()
+
+        db = self.SessionTest()
+        try:
+            t0 = time.time()
+            res_sal = commit_salary_dataset(db, sal_bytes, scope="ALL", replace_existing=True)
+            res_tgt = commit_targets_dataset(db, tgt_bytes, scope="ALL", replace_existing=True)
+            elapsed = time.time() - t0
+            self.assertGreater(res_sal["count"], 0)
+            self.assertGreater(res_tgt["count"], 0)
+            self.assertLess(elapsed, 3.0, f"Commit dataset quá chậm ({elapsed:.2f}s)!")
+        finally:
+            db.close()
 
 
 if __name__ == "__main__":

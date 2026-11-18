@@ -98,6 +98,11 @@ def get_tich_luy_v3(
 def update_tich_luy_cell(req: HistoryCellUpdateReq, user: dict = Depends(require_admin), db: Session = Depends(get_db)):
     if not (1 <= req.month_num <= 12):
         raise HTTPException(status_code=400, detail="Tháng cập nhật phải nằm trong khoảng 1..12")
+
+    period = db.query(Period).filter(Period.year_num == req.year_num, Period.month_num == req.month_num).first()
+    if period and period.status == "ĐÃ KHÓA":
+        raise HTTPException(status_code=400, detail="Không thể chỉnh sửa dữ liệu kỳ đã khóa")
+
     emp = db.query(Employee).filter(Employee.emp_code == req.emp_code).first()
     if not emp:
         raise HTTPException(status_code=404, detail=f"Không tìm thấy cán bộ {req.emp_code}")
@@ -106,12 +111,14 @@ def update_tich_luy_cell(req: HistoryCellUpdateReq, user: dict = Depends(require
         MonthlyHistorySnapshot.month_num == req.month_num,
         MonthlyHistorySnapshot.emp_code == req.emp_code,
     ).first()
+    if snap and snap.is_frozen:
+        raise HTTPException(status_code=400, detail="Không thể chỉnh sửa dữ liệu kỳ đã khóa")
     if not snap:
         snap = MonthlyHistorySnapshot(
             year_num=req.year_num,
             month_num=req.month_num,
             emp_code=req.emp_code,
-            is_frozen=True,
+            is_frozen=False,
         )
         db.add(snap)
     if req.kpi_score is not None:
@@ -260,6 +267,8 @@ def get_audit_log(limit: int = 200, user: dict = Depends(require_admin), db: Ses
             "action": l.action,
             "target_data": l.target_data,
             "details": l.details,
+            "ip_address": l.ip_address,
+            "user_agent": l.user_agent,
         }
         for l in logs
     ]
@@ -271,6 +280,7 @@ def download_export_excel(period_code: Optional[str] = None, include_open_in_v3:
     pcode = period_code or cfg.current_period_code
     data = export_payroll_workbook(db, pcode, include_open_in_v3=include_open_in_v3)
     log_audit(db, "Admin_QuanLy", "XUAT_EXCEL", pcode, f"Xuất file Excel tổng hợp 3P & V2/V3 kỳ {pcode}")
+    db.commit()
     return StreamingResponse(
         io.BytesIO(data),
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",

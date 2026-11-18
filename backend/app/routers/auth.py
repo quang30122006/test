@@ -49,6 +49,7 @@ def login_admin(req: AdminLoginReq, db: Session = Depends(get_db)):
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Mật khẩu Quản trị không chính xác")
     token = create_access_token(role="ADMIN", subject="admin", full_name="Quản trị / Ban Giám đốc")
     log_audit(db, "Admin_QuanLy", "DANG_NHAP_ADMIN", cfg.current_period_name, "Đăng nhập thành công quyền Quản trị trên Web")
+    db.commit()
     return {
         "access_token": token,
         "role": "ADMIN",
@@ -66,6 +67,7 @@ def login_staff(req: StaffLoginReq, db: Session = Depends(get_db)):
     cfg = db.query(SystemConfig).first()
     token = create_access_token(role="STAFF", subject=emp.emp_code, emp_code=emp.emp_code, full_name=emp.full_name)
     log_audit(db, f"{emp.emp_code} ({emp.full_name})", "DANG_NHAP_CAN_BO", cfg.current_period_name if cfg else "", "Cán bộ đăng nhập cổng tra cứu cá nhân")
+    db.commit()
     return {
         "access_token": token,
         "role": "STAFF",

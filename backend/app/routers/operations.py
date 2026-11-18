@@ -3,7 +3,7 @@ from datetime import datetime
 from typing import List, Optional
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Query
 from fastapi.responses import StreamingResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from ..database import get_db
@@ -23,6 +23,18 @@ from ..engine import compute_period_kpi_and_payroll, sync_period_snapshot
 
 router = APIRouter(prefix="/api/operations", tags=["Operations (Block 2)"])
 
+MAX_UPLOAD_SIZE = 15 * 1024 * 1024  # 15MB
+
+
+async def _read_capped_excel_file(file: UploadFile, max_size: int = MAX_UPLOAD_SIZE) -> bytes:
+    content = await file.read()
+    if len(content) > max_size:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Dung lượng tệp vượt quá giới hạn tối đa ({max_size // (1024 * 1024)}MB)",
+        )
+    return content
+
 
 def _ensure_period_editable(db: Session, period_code: str) -> Period:
     p = db.query(Period).filter(Period.period_code == period_code).first()
@@ -34,24 +46,24 @@ def _ensure_period_editable(db: Session, period_code: str) -> Period:
 
 
 class SalaryRowUpdateReq(BaseModel):
-    base_v1: Optional[float] = None
-    base_v2: Optional[float] = None
-    actual_workdays: Optional[float] = None
-    hsl_v1: Optional[float] = None
+    base_v1: Optional[float] = Field(None, ge=0.0, description="Mức lương V1 cơ bản (>= 0)")
+    base_v2: Optional[float] = Field(None, ge=0.0, description="Mức lương V2 gốc (>= 0)")
+    actual_workdays: Optional[float] = Field(None, ge=0.0, le=31.0, description="Ngày công thực tế (0 - 31)")
+    hsl_v1: Optional[float] = Field(None, ge=0.0, description="Hệ số lương V1 (>= 0)")
     note: Optional[str] = None
 
 
 class AttendanceUpdateItem(BaseModel):
     emp_code: str
-    actual_workdays: float
+    actual_workdays: float = Field(..., ge=0.0, le=31.0, description="Ngày công thực tế (0 - 31)")
     note: str = ""
 
 
 class TargetExecutionItemReq(BaseModel):
     emp_code: str
     indicator_code: str
-    target_value: float
-    actual_value: float
+    target_value: float = Field(..., ge=0.0, description="Chỉ tiêu kế hoạch giao (>= 0)")
+    actual_value: float = Field(..., ge=0.0, description="Số liệu thực hiện (>= 0)")
 
 
 class ViolationCreateReq(BaseModel):
@@ -60,13 +72,13 @@ class ViolationCreateReq(BaseModel):
     pillar_type: str = "3.3"  # 3.1 (Nội quy) | 3.3 (Nghiệp vụ)
     error_code: str
     error_detail: str
-    emp_deduction: float
+    emp_deduction: float = Field(..., ge=0.0, description="Điểm trừ trực tiếp (>= 0)")
     has_ksv_resp: bool = False
     ksv_emp_code: str = ""
-    ksv_proposed_points: Optional[float] = None
+    ksv_proposed_points: Optional[float] = Field(None, ge=0.0, description="Điểm trừ đề xuất KSV (>= 0)")
     has_approver_resp: bool = False
     approver_emp_code: str = ""
-    approver_points: Optional[float] = None
+    approver_points: Optional[float] = Field(None, ge=0.0, description="Điểm trừ người phê duyệt (>= 0)")
 
 
 class KsvReviewReq(BaseModel):
@@ -113,10 +125,12 @@ async def upload_salary_excel(
     cfg = db.query(SystemConfig).first()
     pcode = period_code or cfg.current_period_code
     p = _ensure_period_editable(db, pcode)
-    content = await file.read()
+    content = await _read_capped_excel_file(file)
     try:
         res = import_salary_excel(db, content, pcode, replace_existing=True)
-    except ValueError as e:
+    except HTTPException:
+        raise
+    except (ValueError, Exception) as e:
         raise HTTPException(status_code=400, detail=str(e))
     log_audit(db, "Admin_QuanLy", "IMPORT_LUONG", p.period_name, f"Nạp bảng lương từ file {file.filename} ({res['sheet_name']}) - {res['count']} cán bộ")
     return {"message": f"Đã nạp thành công {res['count']} cán bộ từ sheet '{res['sheet_name']}'", **res}
@@ -183,6 +197,17 @@ def update_salary_row(emp_code: str, req: SalaryRowUpdateReq, period_code: Optio
     return {"message": "Đã cập nhật dòng lương"}
 
 
+@router.put("/salary-row")
+def update_salary_row_alias(
+    emp_code: str,
+    req: SalaryRowUpdateReq,
+    period_code: Optional[str] = None,
+    user: dict = Depends(require_admin),
+    db: Session = Depends(get_db),
+):
+    return update_salary_row(emp_code=emp_code, req=req, period_code=period_code, user=user, db=db)
+
+
 # ---- 2. IMPORT & KẾT QUẢ CHỈ TIÊU KINH DOANH ----
 @router.get("/targets-execution")
 def get_targets_execution(period_code: Optional[str] = None, emp_code: Optional[str] = None, user: dict = Depends(require_admin), db: Session = Depends(get_db)):
@@ -205,10 +230,12 @@ async def upload_targets_excel(
     cfg = db.query(SystemConfig).first()
     pcode = period_code or cfg.current_period_code
     p = _ensure_period_editable(db, pcode)
-    content = await file.read()
+    content = await _read_capped_excel_file(file)
     try:
         res = import_targets_excel(db, content, pcode, replace_existing=True)
-    except ValueError as e:
+    except HTTPException:
+        raise
+    except (ValueError, Exception) as e:
         raise HTTPException(status_code=400, detail=str(e))
     log_audit(db, "Admin_QuanLy", "IMPORT_CHI_TIEU", p.period_name, f"Nạp kết quả chỉ tiêu từ file {file.filename} ({res['sheet_name']}) - {res['count']} bản ghi")
     return {"message": f"Đã nạp thành công {res['count']} bản ghi chỉ tiêu từ sheet '{res['sheet_name']}'", **res}
@@ -577,10 +604,12 @@ async def preview_salary_dataset_api(
     user: dict = Depends(require_admin),
     db: Session = Depends(get_db),
 ):
-    content = await file.read()
+    content = await _read_capped_excel_file(file)
     try:
         return preview_salary_excel(db, content, scope=scope, period_code=period_code)
-    except ValueError as e:
+    except HTTPException:
+        raise
+    except (ValueError, Exception) as e:
         raise HTTPException(status_code=400, detail=str(e))
 
 
@@ -595,7 +624,7 @@ async def commit_salary_dataset_api(
     user: dict = Depends(require_admin),
     db: Session = Depends(get_db),
 ):
-    content = await file.read()
+    content = await _read_capped_excel_file(file)
     months_list = _parse_months_csv(selected_months)
     try:
         res = commit_salary_dataset(
@@ -603,7 +632,9 @@ async def commit_salary_dataset_api(
             selected_months=months_list, replace_existing=True,
             overwrite_locked=overwrite_locked, sync_history=sync_history,
         )
-    except ValueError as e:
+    except HTTPException:
+        raise
+    except (ValueError, Exception) as e:
         raise HTTPException(status_code=400, detail=str(e))
     p_names = ", ".join(x["period_code"] for x in res["applied_periods"])
     log_audit(db, "Admin_QuanLy", "IMPORT_DATASET_LUONG", p_names or (period_code or "ALL"), f"Nạp {res['count']} dòng lương từ {file.filename} ({res['sheet_name']})")
@@ -621,10 +652,12 @@ async def preview_targets_dataset_api(
     user: dict = Depends(require_admin),
     db: Session = Depends(get_db),
 ):
-    content = await file.read()
+    content = await _read_capped_excel_file(file)
     try:
         return preview_targets_excel(db, content, scope=scope, period_code=period_code)
-    except ValueError as e:
+    except HTTPException:
+        raise
+    except (ValueError, Exception) as e:
         raise HTTPException(status_code=400, detail=str(e))
 
 
@@ -639,7 +672,7 @@ async def commit_targets_dataset_api(
     user: dict = Depends(require_admin),
     db: Session = Depends(get_db),
 ):
-    content = await file.read()
+    content = await _read_capped_excel_file(file)
     months_list = _parse_months_csv(selected_months)
     try:
         res = commit_targets_dataset(
@@ -647,7 +680,9 @@ async def commit_targets_dataset_api(
             selected_months=months_list, replace_existing=True,
             overwrite_locked=overwrite_locked, sync_history=sync_history,
         )
-    except ValueError as e:
+    except HTTPException:
+        raise
+    except (ValueError, Exception) as e:
         raise HTTPException(status_code=400, detail=str(e))
     p_names = ", ".join(x["period_code"] for x in res["applied_periods"])
     log_audit(db, "Admin_QuanLy", "IMPORT_DATASET_CHITIEU", p_names or (period_code or "ALL"), f"Nạp {res['count']} dòng chỉ tiêu từ {file.filename} ({res['sheet_name']})")
@@ -669,6 +704,10 @@ def recalculate_history_from_dataset(
         p = db.query(Period).filter(Period.period_code == period_code).first()
         if not p:
             raise HTTPException(status_code=404, detail="Không tìm thấy kỳ")
+        has_sal = db.query(SalaryImportRow).filter(SalaryImportRow.period_code == p.period_code).count() > 0
+        has_tgt = db.query(TargetExecutionRow).filter(TargetExecutionRow.period_code == p.period_code).count() > 0
+        if not (has_sal and has_tgt):
+            raise HTTPException(status_code=400, detail="Thiếu dữ liệu chi tiết của kỳ để tính lại")
         cnt = sync_period_snapshot(db, p.period_code, frozen=(p.status == "ĐÃ KHÓA"))
         db.commit()
         log_audit(db, "Admin_QuanLy", "DONG_BO_SNAPSHOT_V3", p.period_name, f"Tính lại và đồng bộ {cnt} bản ghi từ Dataset chi tiết sang TichLuy_V3")
@@ -701,6 +740,7 @@ def download_dataset_12_months(
     data = export_dataset_12_months_excel(db, kind=kind, year_num=year_num)
     fname = f"DATASET_LUONG_12_THANG_{year_num}.xlsx" if kind == "salary" else f"DATASET_CHI_TIEU_12_THANG_{year_num}.xlsx"
     log_audit(db, "Admin_QuanLy", "XUAT_DATASET_12_THANG", fname, f"Xuất toàn bộ dataset {kind} năm {year_num} (13 sheet chuẩn)")
+    db.commit()
     return StreamingResponse(
         io.BytesIO(data),
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",

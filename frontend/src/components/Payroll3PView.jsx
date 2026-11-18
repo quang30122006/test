@@ -6,6 +6,7 @@ import { Download, Printer, Wallet } from 'lucide-react';
 export default function Payroll3PView({ selectedPeriod, onNavigate, notify }) {
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(true);
+  const [exporting, setExporting] = useState(false);
 
   const load = async () => {
     setLoading(true);
@@ -16,6 +17,19 @@ export default function Payroll3PView({ selectedPeriod, onNavigate, notify }) {
       notify(err.message, 'error');
     } finally {
       setLoading(false);
+    }
+  };
+
+  const handleExportExcel = async () => {
+    setExporting(true);
+    try {
+      await apiDownload(`/api/payroll/export-excel?period_code=${selectedPeriod}`, `BangLuong_3P_${selectedPeriod}.xlsx`);
+      notify?.('Xuất báo cáo Excel thành công!', 'success');
+    } catch (err) {
+      console.error('Lỗi xuất báo cáo Excel:', err);
+      notify?.(`Xuất file thất bại: ${err?.message || 'Không thể kết nối đến máy chủ.'}`, 'error');
+    } finally {
+      setExporting(false);
     }
   };
 
@@ -49,10 +63,11 @@ export default function Payroll3PView({ selectedPeriod, onNavigate, notify }) {
             <Printer className="w-4 h-4 text-sky-600" /> In Bảng V2 (02/TL-V2)
           </button>
           <button
-            onClick={() => apiDownload(`/api/payroll/export-excel?period_code=${selectedPeriod}`, `BangLuong_3P_${selectedPeriod}.xlsx`)}
-            className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-emerald-700 hover:bg-emerald-800 text-white text-xs sm:text-sm font-bold shadow-sm cursor-pointer"
+            onClick={handleExportExcel}
+            disabled={exporting}
+            className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-emerald-700 hover:bg-emerald-800 disabled:opacity-50 text-white text-xs sm:text-sm font-bold shadow-sm cursor-pointer"
           >
-            <Download className="w-4 h-4" /> Xuất Excel Tổng hợp
+            <Download className="w-4 h-4" /> {exporting ? 'Đang xuất...' : 'Xuất Excel Tổng hợp'}
           </button>
         </div>
       </div>

@@ -3,7 +3,7 @@ import { useGSAP } from '@gsap/react';
 import { Flip } from 'gsap/Flip';
 
 gsap.registerPlugin(useGSAP, Flip);
-gsap.defaults({ ease: 'power2.out', duration: 0.28 });
+gsap.defaults({ ease: 'power2.out', duration: 0.36 });
 
 function prefersReducedMotion() {
   return typeof window !== 'undefined' &&
@@ -20,17 +20,17 @@ export function runReducedMotionAware(cb) {
 }
 
 /**
- * Hiệu ứng bật nhẹ (pop) khi người dùng chọn một mục, thẻ, tháng hoặc option.
+ * Hiệu ứng tương tác êm ái khi người dùng chọn một mục, thẻ hoặc option (không nảy lố).
  */
-export function animateSelectionPop(el, scaleFrom = 0.962) {
+export function animateSelectionPop(el, scaleFrom = 0.982) {
   if (!el || prefersReducedMotion()) return;
   gsap.fromTo(
     el,
     { scale: scaleFrom },
     {
       scale: 1,
-      duration: 0.28,
-      ease: 'back.out(2.2)',
+      duration: 0.24,
+      ease: 'power2.out',
       overwrite: 'auto',
       clearProps: 'transform',
     }
@@ -38,19 +38,19 @@ export function animateSelectionPop(el, scaleFrom = 0.962) {
 }
 
 /**
- * Hiệu ứng xuất hiện mượt cho nội dung panel khi chuyển tab hoặc đổi nguồn dữ liệu.
+ * Hiệu ứng xuất hiện mượt mà, đầm chắc khi chuyển tab hoặc đổi view (độ lệch trục y siêu nhẹ 4px, không giật font chữ).
  */
 export function animateTabContentEnter(el, vars = {}) {
   if (!el || prefersReducedMotion()) return;
   return gsap.fromTo(
     el,
-    { y: vars.y ?? 10, scale: vars.scale ?? 0.994, autoAlpha: 0 },
+    { y: vars.y ?? 4, scale: vars.scale ?? 1, autoAlpha: 0 },
     {
       y: 0,
       scale: 1,
       autoAlpha: 1,
-      duration: vars.duration ?? 0.28,
-      ease: 'power3.out',
+      duration: vars.duration ?? 0.38,
+      ease: 'power2.out',
       overwrite: 'auto',
       clearProps: 'transform,opacity,visibility',
     }
@@ -58,8 +58,8 @@ export function animateTabContentEnter(el, vars = {}) {
 }
 
 /**
- * Gắn hiệu ứng Nhấn (tactile spring press) và Chọn (selection pop) trên toàn ứng dụng,
- * dùng GPU transform thuần và tự dọn inline style sau khi hoàn tất.
+ * Gắn hiệu ứng Nhấn (tactile press) êm ái trên toàn ứng dụng,
+ * dùng GPU transform thuần, tỉ lệ co nhẹ nhàng (0.985) và tự dọn inline style.
  */
 export function installTactileInteractions() {
   if (typeof window === 'undefined' || typeof document === 'undefined') return () => {};
@@ -84,15 +84,15 @@ export function installTactileInteractions() {
     return btn;
   };
 
-  const releasePressed = (spring = true) => {
+  const releasePressed = () => {
     if (!pressedEl) return;
     const el = pressedEl;
     pressedEl = null;
     if (!active) return;
     gsap.to(el, {
       scale: 1,
-      duration: spring ? 0.28 : 0.18,
-      ease: spring ? 'back.out(2.3)' : 'power2.out',
+      duration: 0.22,
+      ease: 'power2.out',
       overwrite: 'auto',
       clearProps: 'transform',
     });
@@ -104,15 +104,15 @@ export function installTactileInteractions() {
     if (!target) return;
     pressedEl = target;
     gsap.to(target, {
-      scale: 0.965,
-      duration: 0.085,
-      ease: 'power2.out',
+      scale: 0.985,
+      duration: 0.12,
+      ease: 'power1.out',
       overwrite: 'auto',
     });
   };
 
-  const onPointerUp = () => releasePressed(true);
-  const onPointerCancel = () => releasePressed(false);
+  const onPointerUp = () => releasePressed();
+  const onPointerCancel = () => releasePressed();
 
   const onChange = (e) => {
     if (!active) return;
@@ -120,7 +120,7 @@ export function installTactileInteractions() {
     if (!(el instanceof Element)) return;
     if (el.matches('select, input[type="checkbox"], input[type="radio"]')) {
       const container = el.closest('label, .gsap-select-target') || el;
-      animateSelectionPop(container, 0.972);
+      animateSelectionPop(container, 0.985);
     }
   };
 

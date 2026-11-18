@@ -79,7 +79,7 @@ export default function SecurityView({ selectedPeriod, periods, onReloadPeriods,
 
   const toggleMonth = (code, isLocked, e) => {
     if (isLocked) return;
-    if (e?.currentTarget) animateSelectionPop(e.currentTarget, 0.96);
+    if (e?.currentTarget) animateSelectionPop(e.currentTarget, 0.985);
     setSelectedMonths((prev) => (prev.includes(code) ? prev.filter((c) => c !== code) : [...prev, code]));
   };
 

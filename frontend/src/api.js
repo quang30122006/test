@@ -28,7 +28,13 @@ export async function apiFetch(path, options = {}) {
     let msg = `Lỗi HTTP ${res.status}`;
     try {
       const data = await res.json();
-      msg = data.detail || data.message || msg;
+      if (Array.isArray(data.detail)) {
+        msg = data.detail.map((e) => e.msg || JSON.stringify(e)).join(', ');
+      } else if (typeof data.detail === 'object' && data.detail !== null) {
+        msg = JSON.stringify(data.detail);
+      } else {
+        msg = data.detail || data.message || msg;
+      }
     } catch {
       // ignore
     }
@@ -42,7 +48,32 @@ export async function apiFetch(path, options = {}) {
 }
 
 export async function apiDownload(path, filename) {
-  const res = await apiFetch(path, { method: 'GET' });
+  const token = getToken();
+  const headers = {};
+  if (token) {
+    headers['Authorization'] = `Bearer ${token}`;
+  }
+  const res = await fetch(`${API_BASE}${path}`, { method: 'GET', headers });
+  if (res.status === 401) {
+    setToken('');
+    window.dispatchEvent(new CustomEvent('agribank:unauthorized'));
+  }
+  if (!res.ok) {
+    let msg = `Lỗi HTTP ${res.status}`;
+    try {
+      const data = await res.json();
+      if (Array.isArray(data.detail)) {
+        msg = data.detail.map((e) => e.msg || JSON.stringify(e)).join(', ');
+      } else if (typeof data.detail === 'object' && data.detail !== null) {
+        msg = JSON.stringify(data.detail);
+      } else {
+        msg = data.detail || data.message || msg;
+      }
+    } catch {
+      // ignore
+    }
+    throw new Error(msg);
+  }
   const blob = await res.blob();
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a');
@@ -51,6 +82,5 @@ export async function apiDownload(path, filename) {
   document.body.appendChild(a);
   a.click();
   a.remove();
-  URL.revokeObjectURL(url);
+  setTimeout(() => URL.revokeObjectURL(url), 1500);
 }
-

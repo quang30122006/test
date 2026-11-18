@@ -273,4 +273,6 @@ class AuditLog(Base):
     action = Column(String, nullable=False)
     target_data = Column(String, default="")
     details = Column(Text, default="")
+    ip_address = Column(String(45), nullable=True)
+    user_agent = Column(String(255), nullable=True)
 

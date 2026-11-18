@@ -1,26 +1,21 @@
 import React, { useEffect, useRef, useState } from 'react';
 import {
-  Settings2, Lock, Unlock, Download, Database, Clock, CalendarDays,
+  Settings2, Lock, Unlock, Download, Database, CalendarDays,
   Users, TrendingUp, Wallet, Trophy, CheckCircle2, AlertTriangle,
   BarChart3, ShieldAlert, ArrowRight, History, SlidersHorizontal
 } from 'lucide-react';
 import { apiFetch, apiDownload } from '../api';
 import { fmtMoney, fmtNum, ratingBadgeClass } from '../utils/format';
 import { gsap, useGSAP, runReducedMotionAware } from '../utils/gsapSetup';
+import { AdminHubSkeleton } from './Skeleton';
 
-function formatClockParts(now) {
-  const hh = String(now.getHours()).padStart(2, '0');
-  const mm = String(now.getMinutes()).padStart(2, '0');
-  const ss = String(now.getSeconds()).padStart(2, '0');
+function formatDateVn(d = new Date()) {
   const weekdays = ['Chủ Nhật', 'Thứ Hai', 'Thứ Ba', 'Thứ Tư', 'Thứ Năm', 'Thứ Sáu', 'Thứ Bảy'];
-  const dayName = weekdays[now.getDay()];
-  const dd = String(now.getDate()).padStart(2, '0');
-  const mo = String(now.getMonth() + 1).padStart(2, '0');
-  const yyyy = now.getFullYear();
-  return {
-    timeStr: `${hh}:${mm}:${ss}`,
-    dateStr: `${dayName}, ngày ${dd}/${mo}/${yyyy}`,
-  };
+  const dayName = weekdays[d.getDay()];
+  const dd = String(d.getDate()).padStart(2, '0');
+  const mo = String(d.getMonth() + 1).padStart(2, '0');
+  const yyyy = d.getFullYear();
+  return `${dayName}, ngày ${dd}/${mo}/${yyyy}`;
 }
 
 export default function AdminMenuHub({
@@ -32,26 +27,27 @@ export default function AdminMenuHub({
   ksvPendingCount,
 }) {
   const hubRef = useRef(null);
-  const [now, setNow] = useState(() => new Date());
   const [dash, setDash] = useState(null);
   const [dsStatus, setDsStatus] = useState(null);
   const [cfg, setCfg] = useState(null);
   const [logs, setLogs] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(null);
+  const [reloadKey, setReloadKey] = useState(0);
 
   const curPeriod = periods.find((p) => p.period_code === selectedPeriod);
 
-  // Đồng hồ thực từng giây
-  useEffect(() => {
-    const id = setInterval(() => setNow(new Date()), 1000);
-    return () => clearInterval(id);
-  }, []);
+  const retryLoad = () => {
+    setError(null);
+    setReloadKey((k) => k + 1);
+  };
 
   // Tải đồng thời Dashboard, Trạng thái Dataset 12 tháng, Cấu hình Công thức và Nhật ký gần nhất
   useEffect(() => {
     let cancelled = false;
     const load = async () => {
       setLoading(true);
+      setError(null);
       try {
         const [dRes, sRes, cRes, lRes] = await Promise.all([
           apiFetch(`/api/payroll/dashboard?period_code=${encodeURIComponent(selectedPeriod)}`),
@@ -64,24 +60,24 @@ export default function AdminMenuHub({
         setDsStatus(sRes);
         setCfg(cRes?.config || null);
         setLogs(lRes || []);
-      } catch {
-        // ignore transient errors cleanly
+      } catch (err) {
+        if (!cancelled) setError(err.message || 'Lỗi khi kết nối máy chủ');
       } finally {
         if (!cancelled) setLoading(false);
       }
     };
     load();
     return () => { cancelled = true; };
-  }, [selectedPeriod, periods.length]);
+  }, [selectedPeriod, periods.length, reloadKey]);
 
   useGSAP(() => {
     if (loading || !dash) return;
     return runReducedMotionAware(() => {
-      const tl = gsap.timeline({ defaults: { ease: 'power3.out', clearProps: 'transform,opacity,visibility' } });
-      tl.from('.cmd-hero', { y: 12, autoAlpha: 0, duration: 0.32 })
-        .from('.cmd-kpi', { y: 14, autoAlpha: 0, duration: 0.32, stagger: 0.05 }, '-=0.18')
-        .from('.cmd-panel', { y: 14, autoAlpha: 0, duration: 0.34, stagger: 0.06 }, '-=0.18')
-        .from('.cmd-bar', { scaleX: 0, transformOrigin: 'left center', duration: 0.5, stagger: 0.035, ease: 'power2.out' }, '-=0.22');
+      const tl = gsap.timeline({ defaults: { ease: 'power2.out', clearProps: 'transform,opacity,visibility' } });
+      tl.from('.cmd-hero', { y: 6, autoAlpha: 0, duration: 0.38 })
+        .from('.cmd-kpi', { y: 6, autoAlpha: 0, duration: 0.36, stagger: 0.03 }, '-=0.22')
+        .from('.cmd-panel', { y: 6, autoAlpha: 0, duration: 0.36, stagger: 0.04 }, '-=0.22')
+        .from('.cmd-bar', { scaleX: 0, transformOrigin: 'left center', duration: 0.55, stagger: 0.025, ease: 'power2.out' }, '-=0.22');
 
       gsap.utils.toArray('.cmd-count').forEach((el) => {
         const target = Number(el.dataset.target || 0);
@@ -90,7 +86,7 @@ export default function AdminMenuHub({
         const counter = { val: 0 };
         gsap.to(counter, {
           val: target,
-          duration: 0.6,
+          duration: 0.7,
           ease: 'power2.out',
           onUpdate: () => {
             el.textContent = digits > 0
@@ -102,7 +98,30 @@ export default function AdminMenuHub({
     });
   }, { scope: hubRef, dependencies: [loading, dash?.period_code], revertOnUpdate: true });
 
-  const { timeStr, dateStr } = formatClockParts(now);
+  if (loading) {
+    return <AdminHubSkeleton />;
+  }
+
+  if (error || !dash) {
+    return (
+      <div className="bg-white rounded-2xl border border-rose-200 p-8 shadow-sm text-center max-w-lg mx-auto my-12 space-y-4">
+        <div className="w-12 h-12 rounded-2xl bg-rose-50 text-rose-600 flex items-center justify-center mx-auto">
+          <AlertTriangle className="w-6 h-6" />
+        </div>
+        <div>
+          <h3 className="text-base font-extrabold text-slate-900">Không thể tải Trung tâm Điều hành</h3>
+          <p className="text-xs text-rose-600 mt-1">{error || 'Không nhận được dữ liệu kỳ từ máy chủ'}</p>
+        </div>
+        <button
+          onClick={retryLoad}
+          className="inline-flex items-center gap-1.5 px-4 py-2 rounded-xl bg-[#9E1B32] hover:bg-[#801427] text-white text-xs font-bold shadow-sm cursor-pointer transition"
+        >
+          Thử lại
+        </button>
+      </div>
+    );
+  }
+
   const d = dash?.dashboard || {};
   const tiers = d.tier_distribution || [];
   const salaryStruct = d.salary_structure || [];
@@ -116,83 +135,93 @@ export default function AdminMenuHub({
 
   return (
     <div ref={hubRef} className="space-y-5">
-      {/* Banner điều hành + Đồng hồ Real-Time */}
-      <div className="cmd-hero bg-gradient-to-r from-[#7B1225] via-[#9E1B32] to-rose-700 text-white rounded-2xl p-5 sm:p-6 shadow-md grid grid-cols-1 xl:grid-cols-12 gap-5 items-center">
-        <div className="xl:col-span-8 space-y-3">
+      {/* Banner điều hành tinh giản, sang trọng & tập trung */}
+      <div className="cmd-hero bg-gradient-to-r from-[#7B1225] via-[#9E1B32] to-[#821327] text-white rounded-2xl p-5 sm:p-6 shadow-sm flex flex-col xl:flex-row xl:items-center xl:justify-between gap-5">
+        <div className="space-y-3 max-w-3xl">
           <div className="flex flex-wrap items-center gap-2">
-            <span className="text-[11px] font-bold uppercase tracking-widest text-amber-300 bg-white/10 px-2.5 py-0.5 rounded-full border border-white/15">
+            <span className="text-[10.5px] font-bold uppercase tracking-wider text-amber-300 bg-white/10 px-2.5 py-0.5 rounded-full border border-white/15">
               TRUNG TÂM ĐIỀU HÀNH LÃNH ĐẠO · AGRIBANK 3P
             </span>
             {curPeriod && (
-              <span className="text-xs font-bold px-2.5 py-0.5 rounded-full bg-white text-[#9E1B32]">
+              <span className="text-xs font-bold px-2.5 py-0.5 rounded-full bg-white/95 text-[#9E1B32]">
                 {curPeriod.period_name} · {curPeriod.status} · Kchuẩn {curPeriod.standard_days}d
               </span>
             )}
+            <span className="text-xs text-rose-200/90 hidden md:inline-flex items-center gap-1">
+              <CalendarDays className="w-3.5 h-3.5" /> {formatDateVn()}
+            </span>
           </div>
 
           <div>
-            <h2 className="text-xl sm:text-2xl font-extrabold leading-tight">
+            <h2 className="text-xl sm:text-2xl font-black tracking-tight leading-snug">
               Tổng quan Điều hành Tiền lương 3P & Hiệu suất KPI
             </h2>
-            <p className="text-xs sm:text-sm text-rose-100 mt-1">
-              Rê chuột vào <strong>Khối 1–4 ở thanh bên trái (3D Touch)</strong> để mở nhanh mọi nghiệp vụ, hoặc theo dõi trực tiếp các chỉ số trọng tâm của kỳ bên dưới.
+            <p className="text-xs sm:text-sm text-rose-100/90 mt-1">
+              Theo dõi tự động 3 trụ cột (V1 Vị trí + V2 Hiệu quả + V3 Thù lao năm), tiến độ khóa 12 kỳ và thẩm duyệt KSV trên toàn Chi nhánh.
             </p>
           </div>
 
-          <div className="flex flex-wrap gap-2 pt-1">
+          {/* Nhóm nút hành động có phân cấp thị giác rõ ràng */}
+          <div className="flex flex-wrap items-center gap-2 pt-1">
+            {/* Nút hành động chính (Primary) */}
             <button
               onClick={() => onNavigate('formula_studio')}
-              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-white text-[#9E1B32] hover:bg-rose-50 text-xs font-bold shadow-sm cursor-pointer"
+              className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-white text-[#9E1B32] hover:bg-rose-50 text-xs font-bold shadow-sm cursor-pointer transition"
             >
-              <Settings2 className="w-3.5 h-3.5" /> Studio Công thức
+              <Settings2 className="w-3.5 h-3.5 text-[#9E1B32]" /> Studio Công thức
             </button>
+            {/* Nút hành động phụ đồng bộ kính mờ (Ghost/Glass) */}
             <button
               onClick={() => onNavigate('dataset_manager')}
-              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-amber-500 hover:bg-amber-400 text-slate-950 text-xs font-bold shadow-sm cursor-pointer"
+              className="inline-flex items-center gap-1.5 px-3 py-2 rounded-xl bg-white/10 hover:bg-white/20 border border-white/20 text-white text-xs font-semibold cursor-pointer transition"
             >
-              <Database className="w-3.5 h-3.5" /> Dataset 12 Tháng
+              <Database className="w-3.5 h-3.5 text-amber-300" /> Dataset 12 Tháng
             </button>
             <button
               onClick={() => onOpenPeriodAction('close')}
-              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-white/15 hover:bg-white/25 border border-white/20 text-white text-xs font-semibold cursor-pointer"
+              className="inline-flex items-center gap-1.5 px-3 py-2 rounded-xl bg-white/10 hover:bg-white/20 border border-white/20 text-white text-xs font-semibold cursor-pointer transition"
             >
               <Lock className="w-3.5 h-3.5" /> Khóa kỳ
             </button>
             <button
               onClick={() => onOpenPeriodAction('open')}
-              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-white/15 hover:bg-white/25 border border-white/20 text-white text-xs font-semibold cursor-pointer"
+              className="inline-flex items-center gap-1.5 px-3 py-2 rounded-xl bg-white/10 hover:bg-white/20 border border-white/20 text-white text-xs font-semibold cursor-pointer transition"
             >
               <Unlock className="w-3.5 h-3.5" /> Mở kỳ mới
             </button>
+            {/* Nút xuất Excel nổi bật nhẹ nhàng */}
             <button
               onClick={() => apiDownload(`/api/payroll/export-excel?period_code=${selectedPeriod}`, `BangLuong_3P_${selectedPeriod}.xlsx`)}
-              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold shadow-sm cursor-pointer"
+              className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-emerald-500/20 hover:bg-emerald-500/30 border border-emerald-300/40 text-emerald-100 text-xs font-bold shadow-xs cursor-pointer transition"
             >
-              <Download className="w-3.5 h-3.5" /> Xuất Excel 3P
+              <Download className="w-3.5 h-3.5 text-emerald-300" /> Xuất Excel 3P
             </button>
           </div>
         </div>
 
-        {/* Đồng hồ & Ngày tháng thời gian thực */}
-        <div className="xl:col-span-4 bg-white/10 backdrop-blur-md border border-white/20 rounded-2xl p-4 flex flex-col justify-between gap-2.5">
-          <div className="flex items-center justify-between text-xs text-rose-100">
-            <span className="inline-flex items-center gap-1.5 font-semibold">
-              <Clock className="w-4 h-4 text-amber-300" /> Thời gian hệ thống
-            </span>
-            <span className="px-2 py-0.5 rounded-full bg-emerald-500/25 text-emerald-100 border border-emerald-300/30 font-bold text-[10px]">
-              Đang hoạt động
+        {/* Thẻ tóm tắt tình trạng kỳ gọn gàng thay cho đồng hồ nhảy giây */}
+        <div className="shrink-0 bg-black/15 backdrop-blur-md border border-white/15 rounded-xl p-4 flex flex-col justify-between gap-2.5 min-w-[250px]">
+          <div className="flex items-center justify-between text-[11px] text-rose-100">
+            <span className="font-bold text-amber-300">Trạng thái kỳ: {curPeriod?.period_name || '...'}</span>
+            <span className="px-2 py-0.5 rounded-full bg-emerald-500/25 text-emerald-200 border border-emerald-400/30 font-bold text-[10px]">
+              {curPeriod?.status || 'Bình thường'}
             </span>
           </div>
-          <div className="text-3xl sm:text-4xl font-black tracking-tight tabular-nums text-white">
-            {timeStr}
-          </div>
-          <div className="text-xs sm:text-sm font-medium text-amber-200 flex items-center gap-1.5">
-            <CalendarDays className="w-4 h-4 shrink-0" />
-            <span>{dateStr}</span>
-          </div>
-          <div className="pt-2 border-t border-white/15 flex items-center justify-between text-[11px] text-rose-100">
-            <span>Đã khóa sổ: <strong className="text-white">{lockedCount}/12 kỳ</strong></span>
-            <span>Chờ KSV duyệt: <strong className={ksvPendingCount > 0 ? 'text-amber-300' : 'text-white'}>{ksvPendingCount} phiếu</strong></span>
+          <div className="space-y-1.5 text-xs text-rose-100">
+            <div className="flex items-center justify-between">
+              <span className="text-rose-200">Đã khóa sổ:</span>
+              <strong className="text-white font-bold">{lockedCount}/12 kỳ năm 2026</strong>
+            </div>
+            <div className="flex items-center justify-between">
+              <span className="text-rose-200">Chờ KSV duyệt:</span>
+              <strong className={ksvPendingCount > 0 ? 'text-amber-300 font-extrabold' : 'text-white'}>
+                {ksvPendingCount} phiếu
+              </strong>
+            </div>
+            <div className="pt-1.5 border-t border-white/15 text-[11px] text-amber-200/90 flex items-center justify-between">
+              <span>Hệ thống:</span>
+              <span className="font-semibold text-white">Ổn định · Tự động</span>
+            </div>
           </div>
         </div>
       </div>

@@ -3,35 +3,45 @@ import { apiFetch } from '../api';
 import { fmtMoney, fmtNum, ratingBadgeClass } from '../utils/format';
 import { Users, TrendingUp, Wallet, Trophy, BarChart3, ArrowRight } from 'lucide-react';
 import { gsap, useGSAP, runReducedMotionAware } from '../utils/gsapSetup';
+import { DashboardSkeleton } from './Skeleton';
 
 export default function DashboardView({ selectedPeriod, onNavigate, notify }) {
   const dashRef = useRef(null);
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(null);
+  const [reloadKey, setReloadKey] = useState(0);
+
+  const retryLoad = () => {
+    setError(null);
+    setReloadKey((k) => k + 1);
+  };
 
   useEffect(() => {
     const load = async () => {
       setLoading(true);
+      setError(null);
       try {
         const res = await apiFetch(`/api/payroll/dashboard?period_code=${encodeURIComponent(selectedPeriod)}`);
         setData(res);
       } catch (err) {
+        setError(err.message || 'Lỗi khi kết nối máy chủ');
         notify(err.message, 'error');
       } finally {
         setLoading(false);
       }
     };
     load();
-  }, [selectedPeriod]);
+  }, [selectedPeriod, reloadKey]);
 
   useGSAP(() => {
     if (loading || !data) return;
     return runReducedMotionAware(() => {
-      const tl = gsap.timeline({ defaults: { ease: 'power3.out', clearProps: 'transform,opacity,visibility' } });
-      tl.from('.dash-hero', { y: 14, autoAlpha: 0, duration: 0.35 })
-        .from('.dash-kpi', { y: 16, autoAlpha: 0, duration: 0.35, stagger: 0.06 }, '-=0.2')
-        .from('.dash-panel', { y: 16, autoAlpha: 0, duration: 0.38, stagger: 0.08 }, '-=0.2')
-        .from('.dash-bar', { scaleX: 0, transformOrigin: 'left center', duration: 0.55, stagger: 0.04, ease: 'power2.out' }, '-=0.25');
+      const tl = gsap.timeline({ defaults: { ease: 'power2.out', clearProps: 'transform,opacity,visibility' } });
+      tl.from('.dash-hero', { y: 6, autoAlpha: 0, duration: 0.4 })
+        .from('.dash-kpi', { y: 6, autoAlpha: 0, duration: 0.38, stagger: 0.04 }, '-=0.25')
+        .from('.dash-panel', { y: 6, autoAlpha: 0, duration: 0.38, stagger: 0.05 }, '-=0.25')
+        .from('.dash-bar', { scaleX: 0, transformOrigin: 'left center', duration: 0.6, stagger: 0.03, ease: 'power2.out' }, '-=0.25');
 
       gsap.utils.toArray('.dash-count').forEach((el) => {
         const target = Number(el.dataset.target || 0);
@@ -40,7 +50,7 @@ export default function DashboardView({ selectedPeriod, onNavigate, notify }) {
         const counter = { val: 0 };
         gsap.to(counter, {
           val: target,
-          duration: 0.65,
+          duration: 0.75,
           ease: 'power2.out',
           onUpdate: () => {
             el.textContent = digits > 0
@@ -52,10 +62,26 @@ export default function DashboardView({ selectedPeriod, onNavigate, notify }) {
     });
   }, { scope: dashRef, dependencies: [loading, data?.period_code], revertOnUpdate: true });
 
-  if (loading || !data) {
+  if (loading) {
+    return <DashboardSkeleton />;
+  }
+
+  if (error || !data) {
     return (
-      <div className="bg-white rounded-2xl border border-slate-200 p-12 text-center text-slate-400">
-        Đang tải Dashboard điều hành...
+      <div className="bg-white rounded-2xl border border-rose-200 p-8 shadow-sm text-center max-w-lg mx-auto my-12 space-y-4">
+        <div className="w-12 h-12 rounded-2xl bg-rose-50 text-rose-600 flex items-center justify-center mx-auto">
+          <BarChart3 className="w-6 h-6" />
+        </div>
+        <div>
+          <h3 className="text-base font-extrabold text-slate-900">Không thể tải Dashboard Điều hành</h3>
+          <p className="text-xs text-rose-600 mt-1">{error || 'Không nhận được dữ liệu kỳ từ máy chủ'}</p>
+        </div>
+        <button
+          onClick={retryLoad}
+          className="inline-flex items-center gap-1.5 px-4 py-2 rounded-xl bg-[#9E1B32] hover:bg-[#801427] text-white text-xs font-bold shadow-sm cursor-pointer transition"
+        >
+          Thử lại
+        </button>
       </div>
     );
   }

@@ -1,5 +1,6 @@
 from decimal import Decimal, ROUND_HALF_UP
 from typing import Dict, List, Optional, Any
+from sqlalchemy import or_
 from sqlalchemy.orm import Session
 
 from .models import (
@@ -163,13 +164,18 @@ def compute_period_kpi_and_payroll(
     # Build KPI_Thang & pre-payroll rows
     kpi_rows = []
     pre_payroll = []
+    warnings = []
 
     for emp in employees:
         ec = emp.emp_code
         srow = salary_rows.get(ec)
         base_v1 = float(srow.base_v1) if srow and srow.base_v1 > 0 else float(emp.base_v1)
         base_v2 = float(srow.base_v2) if srow and srow.base_v2 > 0 else float(emp.base_v2)
-        actual_wd = float(srow.actual_workdays) if srow else std_days
+        has_salary_record = srow is not None
+        actual_wd = float(srow.actual_workdays) if has_salary_record else 0.0
+        is_missing_attendance = not has_salary_record
+        if is_missing_attendance:
+            warnings.append(f"Cán bộ {ec} - {emp.full_name}: Thiếu dữ liệu bảng lương/chấm công (gán công = 0)")
 
         # 1. Trụ cột Chuyên môn (P1 + P3)
         d_cb = round(direct_deduct.get(ec, 0.0), 2)
@@ -201,7 +207,7 @@ def compute_period_kpi_and_payroll(
             ti = float(tr.target_value or 0.0)
             ai = float(tr.actual_value or 0.0)
             ci = (ai / ti) if ti > 0 else 0.0
-            si = min(ci, 1.0) * 100.0
+            si = max(0.0, min(ci, 1.0)) * 100.0
             wi = float(ind.weight) if ind else 0.0
 
             exec_details.append({
@@ -222,7 +228,7 @@ def compute_period_kpi_and_payroll(
                 "status": tr.status,
             })
 
-            eff_ci = min(ci, 1.0) if cfg["kpi_cap_mode"] == "INDICATOR_CAP" else ci
+            eff_ci = max(0.0, min(ci, 1.0)) if cfg["kpi_cap_mode"] == "INDICATOR_CAP" else max(0.0, ci)
             branch = ind.kpi_branch if ind else ("HDV" if tr.indicator_code == "CT07" else "DN" if tr.indicator_code == "CT08" else "DV")
             if branch == "HDV":
                 hdv_ratios.append(eff_ci)
@@ -260,9 +266,9 @@ def compute_period_kpi_and_payroll(
         else:
             kpi_raw = 0.0
         if cfg["kpi_cap_mode"] != "UNCAPPED":
-            kpi_score = min(100.0, excel_round(kpi_raw, 2))
+            kpi_score = max(0.0, min(100.0, excel_round(kpi_raw, 2)))
         else:
-            kpi_score = excel_round(kpi_raw, 2)
+            kpi_score = max(0.0, excel_round(kpi_raw, 2))
 
         # 3. Tổng điểm công việc & Tcv
         # Nếu w_reserve > 0 (dự phòng), mặc định chuẩn hóa tổng w_cm + w_kpi (+ w_reserve giả sử 100đ)
@@ -278,13 +284,17 @@ def compute_period_kpi_and_payroll(
 
         if cfg["tcv_mode"] == "TIER_MATRIX":
             tcv_raw = float(tier.ki_month) + priority_pts
+            eff_max_cap = max(float(cfg["tcv_max_cap"]), float(tier.ki_month))
+            tcv = excel_round(
+                min(eff_max_cap, max(float(cfg["tcv_min_floor"]), tcv_raw)),
+                4,
+            )
         else:
             tcv_raw = (work_score / 100.0) + priority_pts
-
-        tcv = excel_round(
-            min(float(cfg["tcv_max_cap"]), max(float(cfg["tcv_min_floor"]), tcv_raw)),
-            4,
-        )
+            tcv = excel_round(
+                min(float(cfg["tcv_max_cap"]), max(float(cfg["tcv_min_floor"]), tcv_raw)),
+                4,
+            )
 
         kpi_rows.append({
             "emp_code": ec,
@@ -312,6 +322,7 @@ def compute_period_kpi_and_payroll(
 
         # 4. Tiền lương 3P
         wd_ratio = (actual_wd / std_days) if std_days > 0 else 1.0
+        wd_ratio = max(0.0, wd_ratio)
         if cfg["workday_ratio_cap"]:
             wd_ratio = min(1.0, wd_ratio)
 
@@ -340,6 +351,8 @@ def compute_period_kpi_and_payroll(
             "v1_actual": v1_actual,
             "v2_adj": v2_adj,
             "total_after": total_after,
+            "missing_attendance": is_missing_attendance,
+            "warning": "Thiếu dữ liệu bảng lương/chấm công (gán công = 0)" if is_missing_attendance else "",
         })
 
     # Tính Quỹ V2 & Quỹ Năng suất QNS
@@ -375,16 +388,19 @@ def compute_period_kpi_and_payroll(
         payroll_rows.append(r)
 
     # Nếu bật bù sai số làm tròn vào người cuối cùng (tùy chọn)
-    if cfg["rounding_residual_to_last"] and payroll_rows and sum_basis > 0 and cfg["qns_mode"] != "AUTO_SUM_BEFORE_ADJ":
-        # Mặc định giữ chuẩn Excel cho AUTO_SUM_BEFORE_ADJ nếu muốn khớp từng dòng, nhưng vẫn có diff chính xác
-        pass
+    if cfg["rounding_residual_to_last"] and payroll_rows and sum_basis > 0 and qns_fund > 0:
+        active_indices = [i for i, r in enumerate(payroll_rows) if r["nsi"] > 0]
+        if active_indices:
+            last_idx = active_indices[-1]
+            sum_except_last = sum(payroll_rows[i]["nsi"] for i in active_indices if i != last_idx)
+            payroll_rows[last_idx]["nsi"] = max(0.0, excel_round(qns_fund - sum_except_last, 0))
 
     for r in payroll_rows:
         diff_ns = r["nsi"] - r["total_before"]
         if cfg["monthly_takehome_mode"] == "INCLUDE_NSI":
             takehome = r["nsi"]
         elif cfg["monthly_takehome_mode"] == "V1_V2_PLUS_DIFF":
-            takehome = r["total_after"] + diff_ns
+            takehome = max(0.0, r["total_after"] + diff_ns)
         else:
             takehome = r["total_after"]
 
@@ -416,6 +432,7 @@ def compute_period_kpi_and_payroll(
         "kpi_rows": kpi_rows,
         "payroll_rows": payroll_rows,
         "execution_details": exec_details,
+        "warnings": warnings,
         "totals": {
             "staff_count": n_staff,
             "base_v1": sum_base_v1,
@@ -456,7 +473,7 @@ def compute_period_kpi_and_payroll(
             "salary_structure": [
                 {"label": "Tổng Lương V1 thực lĩnh", "amount": sum_v1_actual, "ratio": round(sum_v1_actual / (sum_v1_actual + sum_v2_adj), 4) if (sum_v1_actual + sum_v2_adj) else 0.0},
                 {"label": "Tổng Lương V2 thực chi tháng", "amount": sum_v2_adj, "ratio": round(sum_v2_adj / (sum_v1_actual + sum_v2_adj), 4) if (sum_v1_actual + sum_v2_adj) else 0.0},
-                {"label": "Quỹ V2 dôi dư tích lũy (Quý/Năm)", "amount": v2_surplus, "ratio": round(v2_surplus / eff_v2_fund, 4) if eff_v2_fund else 0.0},
+                {"label": "Quỹ V2 dôi dư tích lũy (Quý/Năm)" if v2_surplus >= 0 else "Quỹ V2 thâm hụt (bội chi)", "amount": v2_surplus, "ratio": round(v2_surplus / eff_v2_fund, 4) if eff_v2_fund else 0.0},
                 {"label": "Tổng Quỹ Lương V2 tháng quy định", "amount": eff_v2_fund, "ratio": 1.0},
                 {"label": "TỔNG THỰC CHI LƯƠNG 3P (V1 + V2)", "amount": sum_v1_actual + sum_v2_adj, "ratio": 1.0},
                 {"label": "Quỹ Lương Năng suất đơn vị (QNS)", "amount": qns_fund, "ratio": 1.0},
@@ -509,9 +526,30 @@ def compute_accumulation_v3(
     std_by_month = {p.month_num: float(p.standard_days) for p in periods}
     std_year = sum(std_by_month.get(m, 22.0) for m in range(1, 13))
 
-    employees = db.query(Employee).filter(Employee.is_active == True).order_by(Employee.sort_order.asc(), Employee.id.asc()).all()
+    # 1. Truy xuất danh sách cán bộ duy nhất đã phát sinh snapshot trong năm xét duyệt
+    snap_emp_codes = [
+        r[0] for r in db.query(MonthlyHistorySnapshot.emp_code)
+        .filter(MonthlyHistorySnapshot.year_num == year_num)
+        .distinct()
+        .all()
+    ]
+
+    # 2. Lấy toàn bộ cán bộ đang hoạt động HOẶC đã có dữ liệu snapshot trong năm
+    if snap_emp_codes:
+        emp_filter = or_(Employee.is_active == True, Employee.emp_code.in_(snap_emp_codes))
+    else:
+        emp_filter = (Employee.is_active == True)
+
+    employees = (
+        db.query(Employee)
+        .filter(emp_filter)
+        .order_by(Employee.sort_order.asc(), Employee.id.asc())
+        .all()
+    )
+
+    # 3. Quỹ định mức hàng tháng chỉ tính trên số cán bộ đang hoạt động thực tế
     if v2_fund_mode == "AUTO_SUM_BASE_V2":
-        v2_monthly_fund = sum(float(e.base_v2) for e in employees)
+        v2_monthly_fund = sum(float(e.base_v2) for e in employees if e.is_active)
 
     # Lấy QNS từ kỳ hiện hành nếu sync_v3_with_qns = True
     cur_calc = compute_period_kpi_and_payroll(db, cfg_row.current_period_code, config_override, tiers_override)
@@ -713,6 +751,12 @@ def compute_accumulation_v3(
         last_idx = active_v3_indices[-1]
         sum_except_last = sum(rows[i]["year"]["v3_amount"] for i in active_v3_indices if i != last_idx)
         rows[last_idx]["year"]["v3_amount"] = max(0.0, v3_fund - sum_except_last)
+
+    for r in rows:
+        r["months_active"] = r["year"]["months_active"]
+        r["v2_received"] = r["year"]["v2_received"]
+        r["v3_amount"] = r["year"]["v3_amount"]
+        r["v2_qt"] = r["year"]["v2_qt"]
 
     # Totals
     totals = {

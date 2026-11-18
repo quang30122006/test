@@ -4,12 +4,13 @@ import { fmtNum } from '../utils/format';
 import DatasetImportWizard from './DatasetImportWizard';
 import { Upload, Download, Sparkles, Save, AlertCircle, Search, Database } from 'lucide-react';
 
-export default function ImportTargetsView({ selectedPeriod, periods, notify }) {
+export default function ImportTargetsView({ selectedPeriod, periods, selectedYear = 2026, notify }) {
   const curPeriod = periods.find((p) => p.period_code === selectedPeriod);
   const isLocked = curPeriod?.status === 'ĐÃ KHÓA';
   const [rows, setRows] = useState([]);
   const [loading, setLoading] = useState(true);
   const [uploading, setUploading] = useState(false);
+  const [downloadingKind, setDownloadingKind] = useState(null);
   const [importScope, setImportScope] = useState('SINGLE'); // 'SINGLE' | 'ALL_MONTHS'
   const [previewFile, setPreviewFile] = useState(null);
   const [previewData, setPreviewData] = useState(null);
@@ -20,6 +21,36 @@ export default function ImportTargetsView({ selectedPeriod, periods, notify }) {
   const [editKey, setEditKey] = useState(null);
   const [draft, setDraft] = useState({ target_value: 0, actual_value: 0 });
   const fileRef = useRef(null);
+
+  const handleDownloadTemplate = async () => {
+    setDownloadingKind('template');
+    try {
+      await apiDownload('/api/payroll/template/targets', 'Mau_Import_Chi_Tieu_1_Ky.xlsx');
+      notify?.('Tải file mẫu chỉ tiêu thành công!', 'success');
+    } catch (err) {
+      console.error('Lỗi tải file mẫu:', err);
+      notify?.(`Tải mẫu thất bại: ${err?.message || 'Không thể kết nối đến máy chủ.'}`, 'error');
+    } finally {
+      setDownloadingKind(null);
+    }
+  };
+
+  const handleExport12Months = async () => {
+    setDownloadingKind('export12');
+    try {
+      const yr = selectedYear || (selectedPeriod ? parseInt(selectedPeriod.split('-')[0], 10) : 2026);
+      await apiDownload(
+        `/api/operations/dataset/export-12-months?kind=targets&year_num=${yr}`,
+        `DATASET_CHI_TIEU_12_THANG_${yr}.xlsx`
+      );
+      notify?.('Xuất Dataset Chỉ tiêu 12 tháng thành công!', 'success');
+    } catch (err) {
+      console.error('Lỗi xuất dataset:', err);
+      notify?.(`Xuất file thất bại: ${err?.message || 'Không thể kết nối đến máy chủ.'}`, 'error');
+    } finally {
+      setDownloadingKind(null);
+    }
+  };
 
   const load = async () => {
     setLoading(true);
@@ -121,17 +152,19 @@ export default function ImportTargetsView({ selectedPeriod, periods, notify }) {
 
         <div className="flex flex-wrap items-center gap-2">
           <button
-            onClick={() => apiDownload('/api/payroll/template/targets', 'Mau_Import_Chi_Tieu_1_Ky.xlsx')}
-            className="inline-flex items-center gap-1.5 px-3 py-2 rounded-xl bg-white border border-slate-300 hover:bg-slate-50 text-slate-700 text-xs sm:text-sm font-semibold cursor-pointer"
+            onClick={handleDownloadTemplate}
+            disabled={downloadingKind === 'template'}
+            className="inline-flex items-center gap-1.5 px-3 py-2 rounded-xl bg-white border border-slate-300 hover:bg-slate-50 disabled:opacity-50 text-slate-700 text-xs sm:text-sm font-semibold cursor-pointer"
           >
-            <Download className="w-4 h-4 text-sky-600" /> Mẫu 1 kỳ
+            <Download className="w-4 h-4 text-sky-600" /> {downloadingKind === 'template' ? 'Đang tải...' : 'Mẫu 1 kỳ'}
           </button>
 
           <button
-            onClick={() => apiDownload('/api/operations/dataset/export-12-months?kind=targets&year_num=2026', 'DATASET_CHI_TIEU_12_THANG_2026.xlsx')}
-            className="inline-flex items-center gap-1.5 px-3 py-2 rounded-xl bg-white border border-slate-300 hover:bg-slate-50 text-slate-700 text-xs sm:text-sm font-semibold cursor-pointer"
+            onClick={handleExport12Months}
+            disabled={downloadingKind === 'export12'}
+            className="inline-flex items-center gap-1.5 px-3 py-2 rounded-xl bg-white border border-slate-300 hover:bg-slate-50 disabled:opacity-50 text-slate-700 text-xs sm:text-sm font-semibold cursor-pointer"
           >
-            <Database className="w-4 h-4 text-amber-600" /> Xuất 12 Tháng
+            <Database className="w-4 h-4 text-amber-600" /> {downloadingKind === 'export12' ? 'Đang xuất...' : 'Xuất 12 Tháng'}
           </button>
 
           <label className="inline-flex items-center gap-1.5 text-xs text-slate-600 bg-slate-100 px-2.5 py-2 rounded-xl cursor-pointer">

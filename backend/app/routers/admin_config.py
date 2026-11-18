@@ -176,12 +176,31 @@ def update_config(req: ConfigUpdateReq, user: dict = Depends(require_admin), db:
     new_w_cm = data.get("w_cm", cfg.w_cm)
     new_w_kpi = data.get("w_kpi", cfg.w_kpi)
     new_w_res = data.get("w_reserve", cfg.w_reserve)
-    if abs((new_w_cm + new_w_kpi + new_w_res) - 1.0) > 0.001:
-        raise HTTPException(status_code=400, detail="Tổng trọng số 3 trụ cột (Chuyên môn + KPI + Dự phòng) phải bằng 100% (1.0)")
-
     new_dv = data.get("w_kpi_dv", cfg.w_kpi_dv)
     new_hdv = data.get("w_kpi_hdv", cfg.w_kpi_hdv)
     new_dn = data.get("w_kpi_dn", cfg.w_kpi_dn)
+
+    weights = {
+        "w_cm": new_w_cm, "w_kpi": new_w_kpi, "w_reserve": new_w_res,
+        "w_kpi_dv": new_dv, "w_kpi_hdv": new_hdv, "w_kpi_dn": new_dn,
+    }
+    if "ksv_deduction_ratio" in data:
+        weights["ksv_deduction_ratio"] = data["ksv_deduction_ratio"]
+    if "approver_deduction_ratio" in data:
+        weights["approver_deduction_ratio"] = data["approver_deduction_ratio"]
+
+    for w_name, w_val in weights.items():
+        if w_val is not None:
+            val_f = float(w_val)
+            if not (0.0 <= val_f <= 1.0):
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Trọng số {w_name} phải nằm trong khoảng từ 0.0 đến 1.0 (nhận giá trị {w_val})"
+                )
+
+    if abs((new_w_cm + new_w_kpi + new_w_res) - 1.0) > 0.001:
+        raise HTTPException(status_code=400, detail="Tổng trọng số 3 trụ cột (Chuyên môn + KPI + Dự phòng) phải bằng 100% (1.0)")
+
     if abs((new_dv + new_hdv + new_dn) - 1.0) > 0.001:
         raise HTTPException(status_code=400, detail="Tổng trọng số con KPI (Dịch vụ + Huy động vốn + Dư nợ) phải bằng 100% (1.0)")
 

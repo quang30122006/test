@@ -84,10 +84,10 @@ export default function StaffPortalView({ user, activeTab, notify }) {
     if (loading) return;
     return runReducedMotionAware(() => {
       gsap.from('.staff-card', {
-        y: 12,
+        y: 6,
         autoAlpha: 0,
-        duration: 0.3,
-        stagger: 0.05,
+        duration: 0.38,
+        stagger: 0.04,
         ease: 'power2.out',
         clearProps: 'transform,opacity,visibility',
       });

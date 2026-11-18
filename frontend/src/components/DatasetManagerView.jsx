@@ -7,12 +7,13 @@ import {
   Database, Upload, Download, RefreshCw, CheckCircle2, AlertTriangle, ArrowRight, Trash2
 } from 'lucide-react';
 
-export default function DatasetManagerView({ onNavigate, onSelectPeriod, onReloadPeriods, notify }) {
+export default function DatasetManagerView({ selectedYear = 2026, onNavigate, onSelectPeriod, onReloadPeriods, notify }) {
   const [statusData, setStatusData] = useState(null);
   const [summaryMap, setSummaryMap] = useState({});
   const [clearModalPeriod, setClearModalPeriod] = useState(null);
   const [loading, setLoading] = useState(true);
   const [syncing, setSyncing] = useState(false);
+  const [downloadingKind, setDownloadingKind] = useState(null);
 
   // Preview state
   const [previewKind, setPreviewKind] = useState(null); // 'salary' | 'targets'
@@ -26,8 +27,9 @@ export default function DatasetManagerView({ onNavigate, onSelectPeriod, onReloa
   const load = async () => {
     setLoading(true);
     try {
+      const yr = selectedYear || 2026;
       const [res, sumRes] = await Promise.all([
-        apiFetch('/api/operations/dataset/status?year_num=2026'),
+        apiFetch(`/api/operations/dataset/status?year_num=${yr}`),
         apiFetch('/api/admin/periods/data-summary'),
       ]);
       setStatusData(res);
@@ -45,7 +47,25 @@ export default function DatasetManagerView({ onNavigate, onSelectPeriod, onReloa
 
   useEffect(() => {
     load();
-  }, []);
+  }, [selectedYear]);
+
+  const handleExportDataset = async (kind) => {
+    setDownloadingKind(kind);
+    try {
+      const yr = selectedYear || 2026;
+      const label = kind === 'salary' ? 'LUONG' : 'CHI_TIEU';
+      await apiDownload(
+        `/api/operations/dataset/export-12-months?kind=${kind}&year_num=${yr}`,
+        `DATASET_${label}_12_THANG_${yr}.xlsx`
+      );
+      notify?.(`Xuất Dataset ${kind === 'salary' ? 'Lương' : 'Chỉ tiêu'} 12 tháng thành công!`, 'success');
+    } catch (err) {
+      console.error('Lỗi xuất dataset:', err);
+      notify?.(`Xuất file thất bại: ${err?.message || 'Không thể kết nối đến máy chủ.'}`, 'error');
+    } finally {
+      setDownloadingKind(null);
+    }
+  };
 
   const handleFilePick = async (kind, e) => {
     const file = e.target.files?.[0];
@@ -144,10 +164,11 @@ export default function DatasetManagerView({ onNavigate, onSelectPeriod, onReloa
               />
             </label>
             <button
-              onClick={() => apiDownload('/api/operations/dataset/export-12-months?kind=salary&year_num=2026', 'DATASET_LUONG_12_THANG_2026.xlsx')}
-              className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-white border border-slate-300 hover:bg-slate-50 text-slate-700 text-xs sm:text-sm font-semibold cursor-pointer"
+              onClick={() => handleExportDataset('salary')}
+              disabled={downloadingKind === 'salary'}
+              className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-white border border-slate-300 hover:bg-slate-50 disabled:opacity-50 text-slate-700 text-xs sm:text-sm font-semibold cursor-pointer"
             >
-              <Download className="w-4 h-4 text-sky-600" /> Xuất Dataset Lương 12T
+              <Download className="w-4 h-4 text-sky-600" /> {downloadingKind === 'salary' ? 'Đang xuất...' : 'Xuất Dataset Lương 12T'}
             </button>
           </div>
         </div>
@@ -177,10 +198,11 @@ export default function DatasetManagerView({ onNavigate, onSelectPeriod, onReloa
               />
             </label>
             <button
-              onClick={() => apiDownload('/api/operations/dataset/export-12-months?kind=targets&year_num=2026', 'DATASET_CHI_TIEU_12_THANG_2026.xlsx')}
-              className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-white border border-slate-300 hover:bg-slate-50 text-slate-700 text-xs sm:text-sm font-semibold cursor-pointer"
+              onClick={() => handleExportDataset('targets')}
+              disabled={downloadingKind === 'targets'}
+              className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-white border border-slate-300 hover:bg-slate-50 disabled:opacity-50 text-slate-700 text-xs sm:text-sm font-semibold cursor-pointer"
             >
-              <Download className="w-4 h-4 text-sky-600" /> Xuất Dataset Chỉ tiêu 12T
+              <Download className="w-4 h-4 text-sky-600" /> {downloadingKind === 'targets' ? 'Đang xuất...' : 'Xuất Dataset Chỉ tiêu 12T'}
             </button>
           </div>
         </div>

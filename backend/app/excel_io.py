@@ -14,6 +14,13 @@ from .utils_vi import clean_ascii, parse_month_number
 from .engine import compute_period_kpi_and_payroll, compute_accumulation_v3, sync_period_snapshot
 
 
+def sanitize_excel_cell(val: Any) -> Any:
+    """Ngăn chặn CSV/Excel Formula Injection (DDE, Hyperlink) khi ghi ra file Excel."""
+    if isinstance(val, str) and val.startswith(("=", "+", "-", "@", "\t", "\r")):
+        return "'" + val
+    return val
+
+
 def _is_month_matched(row_val, target_month: int) -> bool:
     if target_month <= 0 or row_val is None or str(row_val).strip() == "":
         return True
@@ -302,11 +309,11 @@ def _parse_salary_workbook(
                 rows_by_month[eff_month] = [x for x in rows_by_month.get(eff_month, []) if x["emp_code"] != ma_val]
 
             if not ma_val:
-                ma_val = f"CB_{eff_month}_{r}"
                 issues.append({
-                    "severity": "warning", "month_num": eff_month, "sheet_name": ws.title, "row_num": r,
-                    "emp_code": ma_val, "message": f"Thiếu Mã CB cho '{name_val}', tự gán tạm {ma_val}",
+                    "severity": "error", "month_num": eff_month, "sheet_name": ws.title, "row_num": r,
+                    "emp_code": "", "message": f"Dòng {r}: Thiếu Mã Cán bộ cho '{name_val}' (bỏ qua dòng)",
                 })
+                continue
 
             seen_keys.add((eff_month, ma_val))
             title = str(ws.cell(r, cols["chuc"]).value or "").strip() if cols["chuc"] else ""
@@ -325,11 +332,12 @@ def _parse_salary_workbook(
             if nc is None or nc <= 0:
                 nc = default_wd
 
-            if v1 < 0 or v2 < 0 or nc > 31:
+            if v1 < 0 or v2 < 0 or nc > 31 or nc < 0:
                 issues.append({
                     "severity": "error", "month_num": eff_month, "sheet_name": ws.title, "row_num": r,
-                    "emp_code": ma_val, "message": f"Giá trị lương/ngày công bất thường (V1={v1}, V2={v2}, NC={nc})",
+                    "emp_code": ma_val, "message": f"Dòng {r}: Giá trị lương/ngày công bất thường (V1={v1}, V2={v2}, NC={nc}) (bỏ qua dòng)",
                 })
+                continue
 
             is_new_emp = ma_val not in existing_emps
             if is_new_emp:
@@ -471,19 +479,28 @@ def _parse_targets_workbook(
                     "emp_code": ma or ten, "message": f"Mã CB '{ma}' ({ten}) chưa có trong 1.DM_CanBo",
                 })
 
+            if not ma:
+                issues.append({
+                    "severity": "error", "month_num": eff_month, "sheet_name": ws.title, "row_num": r,
+                    "emp_code": "", "message": f"Dòng {r}: Thiếu Mã Cán bộ (bỏ qua dòng)",
+                })
+                continue
+
             if mact not in valid_indicators:
                 issues.append({
                     "severity": "error", "month_num": eff_month, "sheet_name": ws.title, "row_num": r,
-                    "emp_code": ma, "message": f"Mã chỉ tiêu '{mact}' chưa được khai báo trong Danh mục GK",
+                    "emp_code": ma, "message": f"Dòng {r}: Mã chỉ tiêu '{mact}' chưa được khai báo trong Danh mục GK (bỏ qua dòng)",
                 })
+                continue
 
             ti = _num_val(ws, r, cols["ti"], 0.0) or 0.0
             ai = _num_val(ws, r, cols["ai"], 0.0) or 0.0
             if ti < 0 or ai < 0:
                 issues.append({
                     "severity": "error", "month_num": eff_month, "sheet_name": ws.title, "row_num": r,
-                    "emp_code": ma, "message": f"Số liệu âm cho chỉ tiêu {mact} (Ti={ti}, Ai={ai})",
+                    "emp_code": ma, "message": f"Dòng {r}: Số liệu âm cho chỉ tiêu {mact} (Ti={ti}, Ai={ai}) (bỏ qua dòng)",
                 })
+                continue
 
             key = (eff_month, ma, mact)
             if key in seen_keys:
@@ -587,6 +604,20 @@ def commit_salary_dataset(
     periods = {p.month_num: p for p in db.query(Period).all()}
     default_staff_pw = hash_password("123456")
 
+    # Bulk pre-fetch danh bạ nhân sự và các bản ghi lương hiện có để tránh N+1 queries
+    emp_map = {e.emp_code: e for e in db.query(Employee).all()}
+    target_pcodes = [
+        periods[m].period_code if m in periods else f"2026-{m:02d}"
+        for m in parsed["rows_by_month"].keys()
+        if selected_months is None or m in selected_months
+    ]
+    existing_sal_map = {}
+    if not replace_existing and target_pcodes:
+        existing_sal_map = {
+            (s.period_code, s.emp_code): s
+            for s in db.query(SalaryImportRow).filter(SalaryImportRow.period_code.in_(target_pcodes)).all()
+        }
+
     applied_periods = []
     skipped_locked = []
     total_saved = 0
@@ -606,7 +637,7 @@ def commit_salary_dataset(
         # Chỉ cập nhật master 1.DM_CanBo đối với kỳ mới nhất trong batch hoặc khi bổ sung CB mới
         is_latest_month = (m == max(parsed["rows_by_month"].keys()))
         for idx, item in enumerate(m_rows, 1):
-            emp = db.query(Employee).filter(Employee.emp_code == item["emp_code"]).first()
+            emp = emp_map.get(item["emp_code"])
             if emp:
                 if is_latest_month or not emp.full_name:
                     emp.full_name = item["full_name"]
@@ -623,7 +654,7 @@ def commit_salary_dataset(
                     emp.is_ksv = item["group_id"] in (3, 5)
                     emp.sort_order = idx
             else:
-                db.add(Employee(
+                new_emp = Employee(
                     emp_code=item["emp_code"],
                     full_name=item["full_name"],
                     title=item["title"],
@@ -639,25 +670,11 @@ def commit_salary_dataset(
                     is_ksv=item["group_id"] in (3, 5),
                     password_hash=default_staff_pw,
                     sort_order=idx,
-                ))
-                db.flush()
+                )
+                db.add(new_emp)
+                emp_map[item["emp_code"]] = new_emp
 
-            existing_sal = db.query(SalaryImportRow).filter(
-                SalaryImportRow.period_code == pcode,
-                SalaryImportRow.emp_code == item["emp_code"],
-            ).first()
-            if existing_sal:
-                existing_sal.full_name = item["full_name"]
-                existing_sal.title = item["title"]
-                existing_sal.department = item["department"]
-                existing_sal.group_name = item["group_name"]
-                existing_sal.labor_type = item["labor_type"]
-                existing_sal.hsl_v1 = item["hsl_v1"]
-                existing_sal.base_v1 = item["base_v1"]
-                existing_sal.base_v2 = item["base_v2"]
-                existing_sal.actual_workdays = item["actual_workdays"]
-                existing_sal.status = "Hợp lệ"
-            else:
+            if replace_existing:
                 db.add(SalaryImportRow(
                     period_code=pcode,
                     emp_code=item["emp_code"],
@@ -672,6 +689,36 @@ def commit_salary_dataset(
                     actual_workdays=item["actual_workdays"],
                     status="Hợp lệ",
                 ))
+            else:
+                existing_sal = existing_sal_map.get((pcode, item["emp_code"]))
+                if existing_sal:
+                    existing_sal.full_name = item["full_name"]
+                    existing_sal.title = item["title"]
+                    existing_sal.department = item["department"]
+                    existing_sal.group_name = item["group_name"]
+                    existing_sal.labor_type = item["labor_type"]
+                    existing_sal.hsl_v1 = item["hsl_v1"]
+                    existing_sal.base_v1 = item["base_v1"]
+                    existing_sal.base_v2 = item["base_v2"]
+                    existing_sal.actual_workdays = item["actual_workdays"]
+                    existing_sal.status = "Hợp lệ"
+                else:
+                    new_sal = SalaryImportRow(
+                        period_code=pcode,
+                        emp_code=item["emp_code"],
+                        full_name=item["full_name"],
+                        title=item["title"],
+                        department=item["department"],
+                        group_name=item["group_name"],
+                        labor_type=item["labor_type"],
+                        hsl_v1=item["hsl_v1"],
+                        base_v1=item["base_v1"],
+                        base_v2=item["base_v2"],
+                        actual_workdays=item["actual_workdays"],
+                        status="Hợp lệ",
+                    )
+                    db.add(new_sal)
+                    existing_sal_map[(pcode, item["emp_code"])] = new_sal
         db.flush()
 
         # Nếu kỳ đã khóa có đủ chỉ tiêu và bật sync_history -> đồng bộ lại snapshot V3
@@ -705,6 +752,19 @@ def commit_targets_dataset(
     parsed = _parse_targets_workbook(db, file_bytes, scope=scope, period_code=period_code)
     periods = {p.month_num: p for p in db.query(Period).all()}
 
+    # Bulk pre-fetch các bản ghi chỉ tiêu hiện có nếu không phải chế độ replace_existing
+    target_pcodes = [
+        periods[m].period_code if m in periods else f"2026-{m:02d}"
+        for m in parsed["rows_by_month"].keys()
+        if selected_months is None or m in selected_months
+    ]
+    existing_tgt_map = {}
+    if not replace_existing and target_pcodes:
+        existing_tgt_map = {
+            (t.period_code, t.emp_code, t.indicator_code): t
+            for t in db.query(TargetExecutionRow).filter(TargetExecutionRow.period_code.in_(target_pcodes)).all()
+        }
+
     applied_periods = []
     skipped_locked = []
     total_saved = 0
@@ -720,17 +780,7 @@ def commit_targets_dataset(
 
         if replace_existing:
             db.query(TargetExecutionRow).filter(TargetExecutionRow.period_code == pcode).delete()
-
-        for item in m_rows:
-            existing = db.query(TargetExecutionRow).filter(
-                TargetExecutionRow.period_code == pcode,
-                TargetExecutionRow.emp_code == item["emp_code"],
-                TargetExecutionRow.indicator_code == item["indicator_code"],
-            ).first()
-            if existing:
-                existing.target_value = item["target_value"]
-                existing.actual_value = item["actual_value"]
-            else:
+            for item in m_rows:
                 db.add(TargetExecutionRow(
                     period_code=pcode,
                     emp_code=item["emp_code"],
@@ -739,6 +789,24 @@ def commit_targets_dataset(
                     actual_value=item["actual_value"],
                     status="Hợp lệ",
                 ))
+        else:
+            for item in m_rows:
+                key = (pcode, item["emp_code"], item["indicator_code"])
+                existing = existing_tgt_map.get(key)
+                if existing:
+                    existing.target_value = item["target_value"]
+                    existing.actual_value = item["actual_value"]
+                else:
+                    new_tgt = TargetExecutionRow(
+                        period_code=pcode,
+                        emp_code=item["emp_code"],
+                        indicator_code=item["indicator_code"],
+                        target_value=item["target_value"],
+                        actual_value=item["actual_value"],
+                        status="Hợp lệ",
+                    )
+                    db.add(new_tgt)
+                    existing_tgt_map[key] = new_tgt
         db.flush()
 
         if sync_history and p and p.status == "ĐÃ KHÓA":
@@ -767,7 +835,7 @@ def import_salary_excel(
     """Wrapper tương thích cho endpoint import 1 kỳ."""
     res = commit_salary_dataset(
         db, file_bytes, scope="SINGLE", period_code=period_code,
-        replace_existing=replace_existing, overwrite_locked=True, sync_history=False,
+        replace_existing=replace_existing, overwrite_locked=False, sync_history=False,
     )
     return {"sheet_name": res["sheet_name"], "count": res["count"]}
 
@@ -781,7 +849,7 @@ def import_targets_excel(
     """Wrapper tương thích cho endpoint import 1 kỳ."""
     res = commit_targets_dataset(
         db, file_bytes, scope="SINGLE", period_code=period_code,
-        replace_existing=replace_existing, overwrite_locked=True, sync_history=False,
+        replace_existing=replace_existing, overwrite_locked=False, sync_history=False,
     )
     return {"sheet_name": res["sheet_name"], "count": res["count"]}
 
@@ -849,7 +917,7 @@ def export_dataset_12_months_excel(db: Session, kind: str = "salary", year_num: 
                 for ws_t, r_pos, stt_v in ((ws_all, 4 + all_idx, all_idx), (ws_m, 4 + m_idx, m_idx)):
                     row_full = [stt_v] + vals
                     for ci, v in enumerate(row_full, 1):
-                        cell = ws_t.cell(r_pos, ci, v)
+                        cell = ws_t.cell(r_pos, ci, sanitize_excel_cell(v))
                         cell.border = border
                         if ci in (10, 11):
                             cell.number_format = "#,##0"
@@ -905,7 +973,7 @@ def export_dataset_12_months_excel(db: Session, kind: str = "salary", year_num: 
                 all_r += 1
                 for ws_t, r_pos in ((ws_all, all_r), (ws_m, 4 + m_idx)):
                     for ci, v in enumerate(vals, 1):
-                        cell = ws_t.cell(r_pos, ci, v)
+                        cell = ws_t.cell(r_pos, ci, sanitize_excel_cell(v))
                         cell.border = border
 
     for sheet in wb.worksheets:
@@ -957,7 +1025,7 @@ def export_payroll_workbook(db: Session, period_code: str, include_open_in_v3: b
             r["total_after"], r["nsi"], r["diff_ns"], r["takehome"], r["remark"]
         ]
         for ci, val in enumerate(vals, 1):
-            c = ws1.cell(row_idx, ci, val)
+            c = ws1.cell(row_idx, ci, sanitize_excel_cell(val))
             c.border = border
             if ci in (6, 7, 8, 13, 14, 15, 16, 17, 18):
                 c.number_format = "#,##0"
@@ -977,7 +1045,7 @@ def export_payroll_workbook(db: Session, period_code: str, include_open_in_v3: b
     for idx, r in enumerate(calc["payroll_rows"], 1):
         vals = [idx, r["emp_code"], r["full_name"], r["title"], r["department"], r["base_v2"], r["tcv"], r["actual_workdays"], r["v2_adj"], ""]
         for ci, val in enumerate(vals, 1):
-            c = ws2.cell(3 + idx, ci, val)
+            c = ws2.cell(3 + idx, ci, sanitize_excel_cell(val))
             c.border = border
             if ci in (6, 9):
                 c.number_format = "#,##0"
@@ -1001,7 +1069,7 @@ def export_payroll_workbook(db: Session, period_code: str, include_open_in_v3: b
         yr = r["year"]
         vals = [idx, r["emp_code"], r["full_name"], r["title"], yr["kq"], yr["v1_total"], yr["v2_qt"], yr["v3_basis"], yr["v3_ratio"], yr["v3_amount"], ""]
         for ci, val in enumerate(vals, 1):
-            c = ws3.cell(3 + idx, ci, val)
+            c = ws3.cell(3 + idx, ci, sanitize_excel_cell(val))
             c.border = border
             if ci in (6, 7, 8, 10):
                 c.number_format = "#,##0"
@@ -1038,7 +1106,7 @@ def build_template_salary_excel(db: Session) -> bytes:
     for idx, e in enumerate(db.query(Employee).filter(Employee.is_active == True).order_by(Employee.sort_order.asc()).all(), 1):
         vals = [idx, e.emp_code, e.full_name, e.title, e.department, e.group_name, e.labor_type, e.hsl_v1, e.pccv, e.base_v1, e.base_v2, std_d, m_num]
         for ci, v in enumerate(vals, 1):
-            ws.cell(4 + idx, ci, v)
+            ws.cell(4 + idx, ci, sanitize_excel_cell(v))
     buf = io.BytesIO()
     wb.save(buf)
     return buf.getvalue()
@@ -1060,11 +1128,11 @@ def build_template_targets_excel(db: Session) -> bytes:
     for e in emps:
         for ind in inds:
             ti = round((ind.target_direct if e.labor_type == "Trực tiếp" else ind.target_indirect) / 12.0, 3)
-            ws.cell(r, 1, e.emp_code)
-            ws.cell(r, 2, e.full_name)
-            ws.cell(r, 3, ind.code)
-            ws.cell(r, 4, ind.name)
-            ws.cell(r, 5, ind.unit)
+            ws.cell(r, 1, sanitize_excel_cell(e.emp_code))
+            ws.cell(r, 2, sanitize_excel_cell(e.full_name))
+            ws.cell(r, 3, sanitize_excel_cell(ind.code))
+            ws.cell(r, 4, sanitize_excel_cell(ind.name))
+            ws.cell(r, 5, sanitize_excel_cell(ind.unit))
             ws.cell(r, 6, ti)
             ws.cell(r, 7, ti)
             ws.cell(r, 8, m_num)

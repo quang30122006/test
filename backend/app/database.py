@@ -15,15 +15,27 @@ if IS_SQLITE:
         cursor = dbapi_connection.cursor()
         cursor.execute("PRAGMA journal_mode=WAL;")
         cursor.execute("PRAGMA foreign_keys=ON;")
+        cursor.execute("PRAGMA busy_timeout=5000;")
         cursor.close()
+elif IS_VERCEL:
+    # Trên Vercel Serverless: Sử dụng NullPool để giao việc quản lý kết nối cho PgBouncer của Neon (-pooler),
+    # tránh lỗi đứt gãy socket SSL SYSCALL EOF khi Lambda container bị đóng băng/unfreeze.
+    engine = create_engine(
+        DATABASE_URL,
+        poolclass=NullPool,
+        pool_pre_ping=True,
+        echo=False,
+    )
 else:
-    engine_kwargs = {"pool_pre_ping": True, "echo": False}
-    if IS_VERCEL:
-        # Serverless Vercel dùng NullPool để tránh cạn kết nối Postgres (Neon)
-        engine_kwargs["poolclass"] = NullPool
-    else:
-        engine_kwargs["pool_size"] = 5
-        engine_kwargs["max_overflow"] = 5
+    # Giữ pool ổn định trên môi trường On-Premise / Server
+    engine_kwargs = {
+        "pool_pre_ping": True,
+        "pool_recycle": 120,
+        "pool_timeout": 15,
+        "pool_size": 5,
+        "max_overflow": 10,
+        "echo": False,
+    }
     engine = create_engine(DATABASE_URL, **engine_kwargs)
 
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
@@ -33,6 +45,9 @@ def get_db():
     db = SessionLocal()
     try:
         yield db
+    except Exception:
+        db.rollback()
+        raise
     finally:
         db.close()
 

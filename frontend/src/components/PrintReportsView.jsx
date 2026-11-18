@@ -5,13 +5,14 @@ import { useGSAP, runReducedMotionAware, animateTabContentEnter } from '../utils
 import SlidingTabs from './SlidingTabs';
 import { Printer, Download, UserCheck, FileText, Award, Search } from 'lucide-react';
 
-export default function PrintReportsView({ selectedPeriod, initialTab = 'payslip', initialEmpCode = '', notify }) {
+export default function PrintReportsView({ selectedPeriod, selectedYear = 2026, initialTab = 'payslip', initialEmpCode = '', notify, onTabChange }) {
   const [tab, setTab] = useState(initialTab); // 'payslip' | 'v2' | 'v3'
   const [employees, setEmployees] = useState([]);
   const [empQuery, setEmpQuery] = useState('');
   const [empCode, setEmpCode] = useState(initialEmpCode);
   const [profileMode, setProfileMode] = useState('slip'); // 'slip' | 'full_profile'
   const [includeOpenV3, setIncludeOpenV3] = useState(false);
+  const [exporting, setExporting] = useState(false);
 
   const [payslip, setPayslip] = useState(null);
   const [v2Data, setV2Data] = useState(null);
@@ -19,10 +20,28 @@ export default function PrintReportsView({ selectedPeriod, initialTab = 'payslip
   const [loading, setLoading] = useState(false);
   const reportStageRef = useRef(null);
 
+  const handleTabChange = (nextTab) => {
+    setTab(nextTab);
+    onTabChange?.(nextTab);
+  };
+
+  const handleExportExcel = async () => {
+    setExporting(true);
+    try {
+      await apiDownload(`/api/payroll/export-excel?period_code=${selectedPeriod}&include_open_in_v3=${includeOpenV3}`, `BaoCao_3P_${selectedPeriod}.xlsx`);
+      notify?.('Xuất báo cáo Excel thành công!', 'success');
+    } catch (err) {
+      console.error('Lỗi xuất báo cáo Excel:', err);
+      notify?.(`Xuất file thất bại: ${err?.message || 'Không thể kết nối đến máy chủ.'}`, 'error');
+    } finally {
+      setExporting(false);
+    }
+  };
+
   useGSAP(() => {
     if (!reportStageRef.current || loading) return;
     return runReducedMotionAware(() => {
-      animateTabContentEnter(reportStageRef.current, { y: 12, duration: 0.3 });
+      animateTabContentEnter(reportStageRef.current, { y: 4, duration: 0.36 });
     });
   }, { dependencies: [tab, profileMode, empCode, loading] });
 
@@ -91,7 +110,7 @@ export default function PrintReportsView({ selectedPeriod, initialTab = 'payslip
             { id: 'v3', label: '3. Thù lao V3 Năm (03/TL-V3)', icon: Award },
           ]}
           value={tab}
-          onChange={setTab}
+          onChange={handleTabChange}
           className="flex flex-wrap items-center gap-2 bg-slate-100 p-1.5 rounded-2xl border border-slate-200"
           buttonClassName="px-3 py-2 rounded-xl text-xs sm:text-sm font-bold"
           pillClassName="bg-[#9E1B32] shadow-sm rounded-xl"
@@ -174,10 +193,11 @@ export default function PrintReportsView({ selectedPeriod, initialTab = 'payslip
 
           <div className="flex flex-wrap gap-2">
             <button
-              onClick={() => apiDownload(`/api/payroll/export-excel?period_code=${selectedPeriod}&include_open_in_v3=${includeOpenV3}`, `BaoCao_3P_${selectedPeriod}.xlsx`)}
-              className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-emerald-700 hover:bg-emerald-800 text-white text-xs sm:text-sm font-bold cursor-pointer"
+              onClick={handleExportExcel}
+              disabled={exporting}
+              className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-emerald-700 hover:bg-emerald-800 disabled:opacity-50 text-white text-xs sm:text-sm font-bold cursor-pointer"
             >
-              <Download className="w-4 h-4" /> Xuất Excel Tổng hợp
+              <Download className="w-4 h-4" /> {exporting ? 'Đang xuất...' : 'Xuất Excel Tổng hợp'}
             </button>
             <button
               onClick={() => window.print()}
@@ -546,7 +566,14 @@ export default function PrintReportsView({ selectedPeriod, initialTab = 'payslip
                   <td className="px-2 py-1.5 border border-slate-300 text-right tabular-nums">{fmtNum(r.year.kpi_bq, 2)}</td>
                   <td className="px-2 py-1.5 border border-slate-300 text-center font-bold">{r.year.rating} ({fmtNum(r.year.h3, 2)})</td>
                   <td className="px-2 py-1.5 border border-slate-300 text-right tabular-nums">{fmtNum(r.year.workdays, 1)}</td>
-                  <td className="px-2 py-1.5 border border-slate-300 text-right tabular-nums">{fmtMoney(r.year.v2_bonus_final)}</td>
+                  <td className="px-2 py-1.5 border border-slate-300 text-right tabular-nums">
+                    <div className="font-semibold">{fmtMoney(r.year.v2_bonus_final)}</div>
+                    {(r.year.status_note?.includes('Chi vượt') || r.year.v2_received > r.year.v2_qt + 10) && (
+                      <div className="inline-block mt-0.5 px-1.5 py-0.5 rounded text-[10px] font-black bg-rose-100 text-rose-800 border border-rose-300 print:text-rose-700 print:border-rose-400">
+                        [Chi vượt: -{fmtMoney(Math.abs(r.year.v2_received - r.year.v2_qt))} đ]
+                      </div>
+                    )}
+                  </td>
                   <td className="px-2 py-1.5 border border-slate-300 text-right tabular-nums">{(r.year.v3_ratio * 100).toFixed(2)}%</td>
                   <td className="px-2 py-1.5 border border-slate-300 text-right tabular-nums font-bold text-[#9E1B32]">{fmtMoney(r.year.v3_amount)}</td>
                   <td className="px-2 py-1.5 border border-slate-300"></td>

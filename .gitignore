@@ -22,3 +22,6 @@ vendor/
 # Sample 12-month import templates (keep New HE_THONG_TIEN_LUONG_KPI_V20_AGRIBANK_CHUAN.xlsm for initial seed)
 FILE_MAU_CHUAN_*.xlsx
 
+
+.vercel
+.env*

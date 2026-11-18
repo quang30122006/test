@@ -7,7 +7,7 @@ from .auth import hash_password
 from .models import (
     SystemConfig, RatingTier, Period, Employee, Indicator,
     InternalRule, KpiErrorCode, SalaryImportRow, TargetExecutionRow,
-    MonthlyHistorySnapshot, AuditLog
+    ViolationRecord, KpiMonthlyOverride, MonthlyHistorySnapshot, AuditLog
 )
 
 
@@ -60,7 +60,287 @@ def _parse_extended_kpi_line(text: str):
     }
 
 
-def seed_database_if_empty(db: Session) -> bool:
+def reset_to_demo_employee(db: Session):
+    """Xóa toàn bộ thông tin nhân sự/số liệu thật và khởi tạo 5 cán bộ demo DEMO001-DEMO005 đủ 12 tháng để kiểm thử."""
+    from datetime import datetime
+    from .engine import sync_period_snapshot
+
+    for model in (
+        SalaryImportRow,
+        TargetExecutionRow,
+        ViolationRecord,
+        KpiMonthlyOverride,
+        MonthlyHistorySnapshot,
+        AuditLog,
+        Employee,
+    ):
+        db.query(model).delete()
+
+    cfg = db.query(SystemConfig).first()
+    if cfg:
+        cfg.current_period_code = "2026-10"
+        cfg.current_period_name = "Tháng 10/2026"
+        cfg.v2_fund_mode = "AUTO_SUM_BASE_V2"
+        cfg.v2_monthly_fund = 54000000.0
+        cfg.qns_mode = "AUTO_SUM_BEFORE_ADJ"
+        cfg.qns_manual_amount = 107000000.0
+        cfg.v3_fund_amount = 107000000.0
+
+    periods = db.query(Period).order_by(Period.month_num.asc()).all()
+    for p in periods:
+        if p.month_num <= 9:
+            p.status = "ĐÃ KHÓA"
+            p.closed_date = "05/10/2026"
+            q_notes = {3: " & Quyết toán Quý I", 6: " & Quyết toán Quý II", 9: " & Quyết toán Quý III"}
+            p.note = f"Dữ liệu Demo đã chốt sổ{q_notes.get(p.month_num, '')}"
+        elif p.month_num == 10:
+            p.status = "ĐANG MỞ"
+            p.closed_date = ""
+            p.note = "Kỳ hiện hành Demo (đang mở chỉnh sửa)"
+        else:
+            p.status = "CHƯA MỞ"
+            p.closed_date = ""
+            p.note = "Kỳ kế hoạch Demo (đã có sẵn dữ liệu test)"
+
+    default_pw = hash_password("123456")
+
+    demo_staff = [
+        {
+            "emp_code": "DEMO001",
+            "full_name": "Nguyễn Văn An",
+            "title": "Trưởng phòng",
+            "department": "Phòng KTNQ",
+            "group_id": 5,
+            "group_name": "Nhóm 5 - Kiểm soát viên & Lãnh đạo phòng",
+            "labor_type": "Gián tiếp",
+            "hsl_v1": 2.38,
+            "pccv": 0.0,
+            "base_v1": 14000000.0,
+            "base_v2": 15000000.0,
+            "is_ksv": True,
+            "sort_order": 1,
+            # Xếp loại A+ vượt định mức (Score: 100.0, Tcv: 1.0)
+            "dv_ratio": 1.0,
+            "hdv_ratio": 1.05,
+            "dn_ratio": 1.0,
+            "absent_days": 0.0,
+            "violation_pts": 0.0,
+            "violation_code": None,
+        },
+        {
+            "emp_code": "DEMO002",
+            "full_name": "Trần Thị Bình",
+            "title": "Phó phòng",
+            "department": "Phòng KTNQ",
+            "group_id": 5,
+            "group_name": "Nhóm 5 - Kiểm soát viên & Lãnh đạo phòng",
+            "labor_type": "Gián tiếp",
+            "hsl_v1": 2.33,
+            "pccv": 0.0,
+            "base_v1": 12000000.0,
+            "base_v2": 12000000.0,
+            "is_ksv": True,
+            "sort_order": 2,
+            # Xếp loại A hoàn thành tốt (Score: 95.0, CM: 100, KPI: 80, Tcv: 0.95)
+            "dv_ratio": 0.80,
+            "hdv_ratio": 0.80,
+            "dn_ratio": 0.80,
+            "absent_days": 0.0,
+            "violation_pts": 0.0,
+            "violation_code": None,
+        },
+        {
+            "emp_code": "DEMO003",
+            "full_name": "Lê Văn Cường",
+            "title": "Cán bộ Tín dụng",
+            "department": "Phòng Khách hàng & Tín dụng",
+            "group_id": 1,
+            "group_name": "Nhóm 1 - Giao dịch viên trực tiếp khách hàng",
+            "labor_type": "Trực tiếp",
+            "hsl_v1": 2.08,
+            "pccv": 0.0,
+            "base_v1": 10000000.0,
+            "base_v2": 10000000.0,
+            "is_ksv": False,
+            "sort_order": 3,
+            # Xếp loại A hoàn thành tốt (Score: 92.0, CM: 96, KPI: 80, Tcv: 0.92)
+            "dv_ratio": 0.80,
+            "hdv_ratio": 0.80,
+            "dn_ratio": 0.90,
+            "absent_days": 0.0,
+            "violation_pts": 4.0,
+            "violation_code": "NQ01",
+            "violation_desc": "Vi phạm tác phong, trang phục đầu tuần (-4đ)",
+            "violation_pillar": "3.1",
+        },
+        {
+            "emp_code": "DEMO004",
+            "full_name": "Phạm Thị Dung",
+            "title": "Giao dịch viên",
+            "department": "Phòng KTNQ",
+            "group_id": 1,
+            "group_name": "Nhóm 1 - Giao dịch viên trực tiếp khách hàng",
+            "labor_type": "Trực tiếp",
+            "hsl_v1": 1.94,
+            "pccv": 0.0,
+            "base_v1": 9000000.0,
+            "base_v2": 9000000.0,
+            "is_ksv": False,
+            "sort_order": 4,
+            # Xếp loại B hoàn thành (Score: 84.0, CM: 92, KPI: 60, Tcv: 0.84)
+            "dv_ratio": 0.60,
+            "hdv_ratio": 0.60,
+            "dn_ratio": 0.60,
+            "absent_days": 1.0,
+            "violation_pts": 8.0,
+            "violation_code": "HS01",
+            "violation_desc": "Hồ sơ, chứng từ: Thiếu thông tin không trọng yếu (-8đ)",
+            "violation_pillar": "3.3",
+        },
+        {
+            "emp_code": "DEMO005",
+            "full_name": "Hoàng Văn Em",
+            "title": "Cán bộ Kiểm ngân/Hỗ trợ",
+            "department": "Phòng KTNQ",
+            "group_id": 4,
+            "group_name": "Nhóm 4 - Thủ quỹ & Ngân quỹ kho quỹ",
+            "labor_type": "Trực tiếp",
+            "hsl_v1": 1.77,
+            "pccv": 0.0,
+            "base_v1": 8000000.0,
+            "base_v2": 8000000.0,
+            "is_ksv": False,
+            "sort_order": 5,
+            # Xếp loại C cần cải thiện (Score: 74.0, CM: 80, KPI: 56, Tcv: 0.74)
+            "dv_ratio": 0.56,
+            "hdv_ratio": 0.56,
+            "dn_ratio": 0.56,
+            "absent_days": 2.0,
+            "violation_pts": 20.0,
+            "violation_code": "NV01",
+            "violation_desc": "Nộp quỹ, kiểm ngân chậm trễ so với quy định (-20đ)",
+            "violation_pillar": "3.3",
+        },
+    ]
+
+    for st in demo_staff:
+        db.add(Employee(
+            emp_code=st["emp_code"],
+            full_name=st["full_name"],
+            title=st["title"],
+            department=st["department"],
+            group_id=st["group_id"],
+            group_name=st["group_name"],
+            labor_type=st["labor_type"],
+            hsl_v1=st["hsl_v1"],
+            pccv=st["pccv"],
+            base_v1=st["base_v1"],
+            base_v2=st["base_v2"],
+            is_active=True,
+            is_ksv=st["is_ksv"],
+            password_hash=default_pw,
+            sort_order=st["sort_order"],
+        ))
+
+    indicators = db.query(Indicator).order_by(Indicator.sort_order.asc()).all()
+
+    for p in periods:
+        m = p.month_num
+        std_d = float(p.standard_days or 22.0)
+        pcode = p.period_code
+
+        for st in demo_staff:
+            ec = st["emp_code"]
+            wd = max(1.0, std_d - st["absent_days"])
+
+            db.add(SalaryImportRow(
+                period_code=pcode,
+                emp_code=ec,
+                full_name=st["full_name"],
+                title=st["title"],
+                department=st["department"],
+                group_name=st["group_name"],
+                labor_type=st["labor_type"],
+                hsl_v1=st["hsl_v1"],
+                base_v1=st["base_v1"],
+                base_v2=st["base_v2"],
+                actual_workdays=wd,
+                status="Hợp lệ",
+                note=f"Dữ liệu Demo T{m:02d}",
+            ))
+
+            for ind in indicators:
+                t_val = 10.0
+                branch = ind.kpi_branch
+                if branch == "HDV":
+                    ratio = st["hdv_ratio"]
+                elif branch == "DN":
+                    ratio = st["dn_ratio"]
+                else:
+                    ratio = st["dv_ratio"]
+                a_val = round(t_val * ratio, 2)
+
+                db.add(TargetExecutionRow(
+                    period_code=pcode,
+                    emp_code=ec,
+                    indicator_code=ind.code,
+                    target_value=t_val,
+                    actual_value=a_val,
+                    status="Hợp lệ",
+                ))
+
+            if st["violation_pts"] > 0:
+                db.add(ViolationRecord(
+                    record_code=f"VP_T{m:02d}_{ec}",
+                    created_date=f"15/{m:02d}/2026",
+                    period_code=pcode,
+                    period_name=p.period_name,
+                    emp_code=ec,
+                    emp_name=st["full_name"],
+                    pillar_type=st["violation_pillar"],
+                    error_code=st["violation_code"],
+                    error_detail=st["violation_desc"],
+                    emp_deduction=st["violation_pts"],
+                    has_ksv_resp=False,
+                    ksv_status="NONE",
+                ))
+
+    # Hàng chờ KSV: 1 vi phạm chờ duyệt kỳ T10
+    db.add(ViolationRecord(
+        record_code="VP_T10_PENDING_DEMO004",
+        created_date="10/10/2026",
+        period_code="2026-10",
+        period_name="Tháng 10/2026",
+        emp_code="DEMO004",
+        emp_name="Phạm Thị Dung",
+        pillar_type="3.3",
+        error_code="HS02",
+        error_detail="Hồ sơ mở thẻ trực tuyến chờ KSV thẩm duyệt liên đới",
+        emp_deduction=0.0,
+        has_ksv_resp=True,
+        ksv_emp_code="DEMO002",
+        ksv_emp_name="Trần Thị Bình",
+        ksv_proposed_points=2.0,
+        ksv_status="PENDING",
+    ))
+
+    db.flush()
+    for p in periods:
+        if p.status == "ĐÃ KHÓA":
+            sync_period_snapshot(db, p.period_code, frozen=True)
+
+    db.add(AuditLog(
+        log_code="LOG001",
+        timestamp=datetime.now().strftime("%d/%m/%Y %H:%M:%S"),
+        actor="Admin_QuanLy",
+        action="KHOI_TAO_DU_LIEU_DEMO_5_CAN_BO_12_THANG",
+        target_data="DEMO001..DEMO005",
+        details="Khởi tạo 5 cán bộ demo (DEMO001..DEMO005) đủ dữ liệu 12 tháng phân hóa A+, A, B, C và điều hòa quỹ V2/QNS",
+    ))
+    db.commit()
+
+
+def seed_database_if_empty(db: Session, demo_only: bool = False) -> bool:
     """Nạp dữ liệu chuẩn từ file Excel gốc nếu database đang trống. Trả về True nếu có nạp."""
     if db.query(SystemConfig).first() is not None:
         return False
@@ -173,32 +453,33 @@ def seed_database_if_empty(db: Session) -> bool:
             cfg.current_period_code = pcode
             cfg.current_period_name = pname
 
-    # 4. Employees từ 1.DM_CanBo!A5:K160
-    ws_cb = wb["1.DM_CanBo"]
-    staff_pw_hash = hash_password("123456")
-    for idx, r in enumerate(range(5, ws_cb.max_row + 1), 1):
-        ma = ws_cb.cell(r, 1).value
-        if ma is None or str(ma).strip() == "":
-            continue
-        emp_code = str(ma).strip()
-        gid = int(ws_cb.cell(r, 5).value or 1)
-        db.add(Employee(
-            emp_code=emp_code,
-            full_name=str(ws_cb.cell(r, 2).value or "").strip(),
-            title=str(ws_cb.cell(r, 3).value or "").strip(),
-            department=str(ws_cb.cell(r, 4).value or "").strip(),
-            group_id=gid,
-            group_name=str(ws_cb.cell(r, 6).value or "").strip(),
-            labor_type=str(ws_cb.cell(r, 7).value or "Trực tiếp").strip(),
-            hsl_v1=float(ws_cb.cell(r, 8).value or 1.0),
-            pccv=float(ws_cb.cell(r, 9).value or 0.0),
-            base_v1=float(ws_cb.cell(r, 10).value or 0.0),
-            base_v2=float(ws_cb.cell(r, 11).value or 0.0),
-            is_active=True,
-            is_ksv=(gid in (3, 5)),
-            password_hash=staff_pw_hash,
-            sort_order=idx,
-        ))
+    # 4. Employees từ 1.DM_CanBo!A5:K160 (chỉ nạp khi không bật demo_only)
+    if not demo_only:
+        ws_cb = wb["1.DM_CanBo"]
+        staff_pw_hash = hash_password("123456")
+        for idx, r in enumerate(range(5, ws_cb.max_row + 1), 1):
+            ma = ws_cb.cell(r, 1).value
+            if ma is None or str(ma).strip() == "":
+                continue
+            emp_code = str(ma).strip()
+            gid = int(ws_cb.cell(r, 5).value or 1)
+            db.add(Employee(
+                emp_code=emp_code,
+                full_name=str(ws_cb.cell(r, 2).value or "").strip(),
+                title=str(ws_cb.cell(r, 3).value or "").strip(),
+                department=str(ws_cb.cell(r, 4).value or "").strip(),
+                group_id=gid,
+                group_name=str(ws_cb.cell(r, 6).value or "").strip(),
+                labor_type=str(ws_cb.cell(r, 7).value or "Trực tiếp").strip(),
+                hsl_v1=float(ws_cb.cell(r, 8).value or 1.0),
+                pccv=float(ws_cb.cell(r, 9).value or 0.0),
+                base_v1=float(ws_cb.cell(r, 10).value or 0.0),
+                base_v2=float(ws_cb.cell(r, 11).value or 0.0),
+                is_active=True,
+                is_ksv=(gid in (3, 5)),
+                password_hash=staff_pw_hash,
+                sort_order=idx,
+            ))
 
     # 5. Indicators từ 2.DM_ChiTieu_GK!A5:G12
     ws_ct = wb["2.DM_ChiTieu_GK"]
@@ -268,6 +549,11 @@ def seed_database_if_empty(db: Session) -> bool:
                     scope=parsed["scope"],
                     applicable_groups=parsed["applicable_groups"],
                 ))
+
+    if demo_only:
+        db.flush()
+        reset_to_demo_employee(db)
+        return True
 
     # 8. SalaryImportRow cho kỳ hiện hành từ IMPORT_LUONG!A7:L...
     ws_il = wb["IMPORT_LUONG"]

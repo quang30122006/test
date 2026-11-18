@@ -12,9 +12,14 @@ def _env_bool(name: str, default: bool) -> bool:
 def _normalize_database_url(raw_url: str) -> str:
     url = (raw_url or "").strip()
     if url.startswith("postgres://"):
-        return "postgresql+psycopg://" + url[len("postgres://"):]
-    if url.startswith("postgresql://"):
-        return "postgresql+psycopg://" + url[len("postgresql://"):]
+        url = "postgresql+psycopg://" + url[len("postgres://"):]
+    elif url.startswith("postgresql://"):
+        url = "postgresql+psycopg://" + url[len("postgresql://"):]
+
+    # Chuẩn hóa Neon Cloud endpoint sử dụng PgBouncer connection pooler (-pooler)
+    if "neon.tech" in url and "-pooler" not in url:
+        import re
+        url = re.sub(r'(@[a-zA-Z0-9_-]+)(\.([a-zA-Z0-9_-]+\.)?neon\.tech)', r'\1-pooler\2', url)
     return url
 
 
@@ -76,5 +81,6 @@ else:
         "http://localhost:8000",
     ]
 
-PUBLIC_STAFF_DIRECTORY = _env_bool("PUBLIC_STAFF_DIRECTORY", default=not IS_VERCEL)
+PUBLIC_STAFF_DIRECTORY = _env_bool("PUBLIC_STAFF_DIRECTORY", default=False)
+SEED_DEMO_ONLY = _env_bool("SEED_DEMO_ONLY", default=True)
 

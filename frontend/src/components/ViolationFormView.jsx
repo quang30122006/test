@@ -45,7 +45,7 @@ export default function ViolationFormView({ selectedPeriod, periods, onNavigate,
     }
     if (!codeListRef.current || loading) return;
     return runReducedMotionAware(() => {
-      animateTabContentEnter(codeListRef.current, { y: 8, duration: 0.24 });
+      animateTabContentEnter(codeListRef.current, { y: 4, duration: 0.36 });
     });
   }, { dependencies: [pillarType, sourceFilter, loading] });
 
@@ -119,14 +119,14 @@ export default function ViolationFormView({ selectedPeriod, periods, onNavigate,
     setErrorCode(r.code);
     setErrorDetail(r.description);
     syncDeductionDerived(Math.abs(r.points));
-    if (pickedCodeRef.current) animateSelectionPop(pickedCodeRef.current, 0.95);
+    if (pickedCodeRef.current) animateSelectionPop(pickedCodeRef.current, 0.985);
   };
 
   const pickKpiCode = (c) => {
     setErrorCode(c.code);
     setErrorDetail(c.description);
     syncDeductionDerived(Math.abs(c.points));
-    if (pickedCodeRef.current) animateSelectionPop(pickedCodeRef.current, 0.95);
+    if (pickedCodeRef.current) animateSelectionPop(pickedCodeRef.current, 0.985);
   };
 
   const handleSubmit = async (e) => {

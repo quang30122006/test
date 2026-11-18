@@ -1,7 +1,41 @@
 import React, { useEffect, useState } from 'react';
-import { Plus, Save, Trash2, KeyRound, Search, Edit3, X, Printer } from 'lucide-react';
+import { Plus, Save, Trash2, KeyRound, Search, Edit3, X, Printer, AlertTriangle } from 'lucide-react';
 import { apiFetch } from '../api';
 import { fmtMoney, fmtNum } from '../utils/format';
+
+function DeleteConfirmModal({ deleteConfirm, onCancel }) {
+  if (!deleteConfirm) return null;
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/60 backdrop-blur-xs p-4 animate-in fade-in">
+      <div className="bg-white rounded-2xl max-w-md w-full p-6 shadow-2xl border border-slate-100">
+        <div className="flex items-center gap-3 text-rose-600 mb-3">
+          <AlertTriangle className="w-6 h-6 shrink-0" />
+          <h3 className="text-lg font-bold text-slate-900">Xác nhận xóa dữ liệu</h3>
+        </div>
+        <p className="text-sm text-slate-600 mb-4">
+          Bạn có chắc chắn muốn xóa bản ghi: <strong className="text-slate-900">{deleteConfirm.name}</strong>? Thao tác này không thể hoàn tác!
+        </p>
+        <div className="flex justify-end gap-3">
+          <button
+            onClick={onCancel}
+            className="px-4 py-2 text-sm font-semibold text-slate-600 hover:bg-slate-100 rounded-xl cursor-pointer"
+          >
+            Hủy bỏ
+          </button>
+          <button
+            onClick={async () => {
+              await deleteConfirm.action();
+              onCancel();
+            }}
+            className="px-4 py-2 text-sm font-semibold text-white bg-rose-600 hover:bg-rose-700 rounded-xl shadow-sm cursor-pointer"
+          >
+            Đồng ý Xóa
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
 
 const GROUP_OPTIONS = [
   { id: 1, label: 'Nhóm 1 - Giao dịch viên trực tiếp khách hàng' },
@@ -23,6 +57,7 @@ export function EmployeesCatalogView({ onNavigate }) {
   });
   const [msg, setMsg] = useState('');
   const [err, setErr] = useState('');
+  const [deleteConfirm, setDeleteConfirm] = useState(null);
 
   const load = async () => {
     const data = await apiFetch('/api/catalogs/employees?include_inactive=true');
@@ -30,6 +65,23 @@ export function EmployeesCatalogView({ onNavigate }) {
   };
 
   useEffect(() => { load(); }, []);
+
+  const handleDeleteEmployee = (empCode, fullName) => {
+    setDeleteConfirm({
+      type: 'employee',
+      id: empCode,
+      name: `${empCode} - ${fullName}`,
+      action: async () => {
+        try {
+          await apiFetch(`/api/catalogs/employees/${empCode}`, { method: 'DELETE' });
+          setMsg(`Đã xóa cán bộ ${fullName}`);
+          await load();
+        } catch (ex) {
+          setErr(ex.message);
+        }
+      },
+    });
+  };
 
   const openNew = () => {
     setIsNew(true);
@@ -145,6 +197,13 @@ export function EmployeesCatalogView({ onNavigate }) {
                     <button onClick={() => handleResetPw(r.emp_code)} title="Đặt lại mật khẩu về 123456" className="px-2 py-1 rounded-lg bg-amber-50 hover:bg-amber-100 text-amber-800 text-xs font-semibold cursor-pointer">
                       <KeyRound className="w-3.5 h-3.5 inline" /> Reset MK
                     </button>
+                    <button
+                      onClick={() => handleDeleteEmployee(r.emp_code, r.full_name)}
+                      title="Xóa cán bộ"
+                      className="px-2 py-1 rounded-lg bg-rose-50 hover:bg-rose-100 text-rose-700 text-xs font-semibold cursor-pointer"
+                    >
+                      <Trash2 className="w-3.5 h-3.5 inline" /> Xóa
+                    </button>
                   </td>
                 </tr>
               ))}
@@ -192,15 +251,15 @@ export function EmployeesCatalogView({ onNavigate }) {
               </div>
               <div>
                 <label className="text-xs font-semibold text-slate-600">Hệ số V1</label>
-                <input type="number" step="0.01" value={form.hsl_v1} onChange={(e) => setForm({ ...form, hsl_v1: Number(e.target.value) })} className="mt-1 w-full rounded-xl border border-slate-300 px-3 py-2" />
+                <input type="number" min="0" step="0.01" value={form.hsl_v1} onChange={(e) => setForm({ ...form, hsl_v1: Number(e.target.value) })} className="mt-1 w-full rounded-xl border border-slate-300 px-3 py-2" />
               </div>
               <div>
                 <label className="text-xs font-semibold text-slate-600">Lương cơ bản V1 (VNĐ)</label>
-                <input type="number" step="1000" value={form.base_v1} onChange={(e) => setForm({ ...form, base_v1: Number(e.target.value) })} className="mt-1 w-full rounded-xl border border-slate-300 px-3 py-2" />
+                <input type="number" min="0" step="1000" value={form.base_v1} onChange={(e) => setForm({ ...form, base_v1: Number(e.target.value) })} className="mt-1 w-full rounded-xl border border-slate-300 px-3 py-2" />
               </div>
               <div>
                 <label className="text-xs font-semibold text-slate-600">Mức Lương V2 gốc (VNĐ)</label>
-                <input type="number" step="1000" value={form.base_v2} onChange={(e) => setForm({ ...form, base_v2: Number(e.target.value) })} className="mt-1 w-full rounded-xl border border-slate-300 px-3 py-2" />
+                <input type="number" min="0" step="1000" value={form.base_v2} onChange={(e) => setForm({ ...form, base_v2: Number(e.target.value) })} className="mt-1 w-full rounded-xl border border-slate-300 px-3 py-2" />
               </div>
               <div className="flex items-center gap-4 pt-5">
                 <label className="inline-flex items-center gap-2 text-xs font-semibold cursor-pointer">
@@ -218,6 +277,8 @@ export function EmployeesCatalogView({ onNavigate }) {
           </div>
         </div>
       )}
+
+      <DeleteConfirmModal deleteConfirm={deleteConfirm} onCancel={() => setDeleteConfirm(null)} />
     </div>
   );
 }
@@ -228,11 +289,29 @@ export function IndicatorsCatalogView({ readOnly = false }) {
   const [newRow, setNewRow] = useState(null);
   const [msg, setMsg] = useState('');
   const [err, setErr] = useState('');
+  const [deleteConfirm, setDeleteConfirm] = useState(null);
 
   const load = async () => setRows(await apiFetch('/api/catalogs/indicators'));
   useEffect(() => { load(); }, []);
 
   const totalWeight = rows.reduce((s, r) => s + Number(editing[r.code]?.weight ?? r.weight), 0);
+
+  const handleDeleteIndicator = (code, name) => {
+    setDeleteConfirm({
+      type: 'indicator',
+      id: code,
+      name: `${code} - ${name}`,
+      action: async () => {
+        try {
+          await apiFetch(`/api/catalogs/indicators/${code}`, { method: 'DELETE' });
+          setMsg(`Đã xóa chỉ tiêu ${code}`);
+          await load();
+        } catch (ex) {
+          setErr(ex.message);
+        }
+      },
+    });
+  };
 
   const handleSave = async (r) => {
     setErr(''); setMsg('');
@@ -318,7 +397,7 @@ export function IndicatorsCatalogView({ readOnly = false }) {
                 <th className="p-3 text-right">Tỷ trọng (0–1)</th>
                 <th className="p-3 text-right">Mức giao Năm (Trực tiếp)</th>
                 <th className="p-3 text-right">Mức giao Năm (Gián tiếp)</th>
-                {!readOnly && <th className="p-3 text-right">Lưu</th>}
+                {!readOnly && <th className="p-3 text-right">Thao tác</th>}
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100 tabular-nums">
@@ -336,19 +415,22 @@ export function IndicatorsCatalogView({ readOnly = false }) {
                     <td className="p-3 text-center text-slate-600">{r.unit}</td>
                     <td className="p-3 text-right">
                       {readOnly ? `${(r.weight * 100).toFixed(1)}%` : (
-                        <input type="number" step="0.01" value={ed.weight ?? r.weight} onChange={(e) => setEditing((p) => ({ ...p, [r.code]: { ...p[r.code], weight: e.target.value } }))} className="w-20 text-right rounded-lg border border-slate-300 px-2 py-1 text-sm" />
+                        <input type="number" min="0" max="1" step="0.01" value={ed.weight ?? r.weight} onChange={(e) => setEditing((p) => ({ ...p, [r.code]: { ...p[r.code], weight: e.target.value } }))} className="w-20 text-right rounded-lg border border-slate-300 px-2 py-1 text-sm" />
                       )}
                     </td>
                     <td className="p-3 text-right">
                       {readOnly ? fmtNum(r.target_direct) : (
-                        <input type="number" step="0.1" value={ed.target_direct ?? r.target_direct} onChange={(e) => setEditing((p) => ({ ...p, [r.code]: { ...p[r.code], target_direct: e.target.value } }))} className="w-24 text-right rounded-lg border border-slate-300 px-2 py-1 text-sm" />
+                        <input type="number" min="0" step="0.1" value={ed.target_direct ?? r.target_direct} onChange={(e) => setEditing((p) => ({ ...p, [r.code]: { ...p[r.code], target_direct: e.target.value } }))} className="w-24 text-right rounded-lg border border-slate-300 px-2 py-1 text-sm" />
                       )}
                     </td>
                     <td className="p-3 text-right font-semibold text-sky-700">{fmtNum(r.target_indirect)}</td>
                     {!readOnly && (
-                      <td className="p-3 text-right">
-                        <button onClick={() => handleSave(r)} className="px-3 py-1.5 rounded-lg bg-slate-100 hover:bg-[#9E1B32] hover:text-white text-slate-700 text-xs font-semibold cursor-pointer">
+                      <td className="p-3 text-right whitespace-nowrap space-x-1">
+                        <button onClick={() => handleSave(r)} className="px-2.5 py-1.5 rounded-lg bg-slate-100 hover:bg-[#9E1B32] hover:text-white text-slate-700 text-xs font-semibold cursor-pointer" title="Lưu chỉ tiêu">
                           <Save className="w-3.5 h-3.5 inline mr-1" />Lưu
+                        </button>
+                        <button onClick={() => handleDeleteIndicator(r.code, r.name)} className="px-2 py-1.5 rounded-lg bg-rose-50 hover:bg-rose-100 text-rose-700 text-xs font-semibold cursor-pointer" title="Xóa chỉ tiêu">
+                          <Trash2 className="w-3.5 h-3.5 inline" />
                         </button>
                       </td>
                     )}
@@ -359,6 +441,8 @@ export function IndicatorsCatalogView({ readOnly = false }) {
           </table>
         </div>
       </div>
+
+      <DeleteConfirmModal deleteConfirm={deleteConfirm} onCancel={() => setDeleteConfirm(null)} />
     </div>
   );
 }
@@ -456,6 +540,8 @@ export function KpiErrorTreeCatalogView({ readOnly = false }) {
   const [levelName, setLevelName] = useState('ALL');
   const [q, setQ] = useState('');
   const [newCode, setNewCode] = useState(null);
+  const [deleteConfirm, setDeleteConfirm] = useState(null);
+  const [editModal, setEditModal] = useState(null);
 
   const load = async () => {
     const params = new URLSearchParams({ source_type: sourceType, level_name: levelName, q, limit: '500' });
@@ -471,6 +557,36 @@ export function KpiErrorTreeCatalogView({ readOnly = false }) {
     await apiFetch('/api/catalogs/kpi-error-codes', { method: 'POST', body: JSON.stringify(newCode) });
     setNewCode(null);
     await load();
+  };
+
+  const handleDeleteErrorCode = (code, desc) => {
+    setDeleteConfirm({
+      type: 'kpi_error_code',
+      id: code,
+      name: `${code}: ${desc}`,
+      action: async () => {
+        try {
+          await apiFetch(`/api/catalogs/kpi-error-codes/${code}`, { method: 'DELETE' });
+          await load();
+        } catch (ex) {
+          alert(ex.message);
+        }
+      },
+    });
+  };
+
+  const handleSaveEditError = async (e) => {
+    e.preventDefault();
+    try {
+      await apiFetch(`/api/catalogs/kpi-error-codes/${editModal.code}`, {
+        method: 'PUT',
+        body: JSON.stringify(editModal),
+      });
+      setEditModal(null);
+      await load();
+    } catch (ex) {
+      alert(ex.message);
+    }
   };
 
   return (
@@ -530,6 +646,7 @@ export function KpiErrorTreeCatalogView({ readOnly = false }) {
                 <th className="p-3 text-center">Mức trừ</th>
                 <th className="p-3 text-left">Nội dung chi tiết lỗi vi phạm</th>
                 <th className="p-3 text-left">Phạm vi / Nhóm áp dụng</th>
+                {!readOnly && <th className="p-3 text-right">Thao tác</th>}
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100">
@@ -543,12 +660,127 @@ export function KpiErrorTreeCatalogView({ readOnly = false }) {
                     {item.scope}
                     <div className="text-[11px] text-slate-400">Nhóm: {item.applicable_groups}</div>
                   </td>
+                  {!readOnly && (
+                    <td className="p-3 text-right whitespace-nowrap space-x-1">
+                      <button
+                        onClick={() => setEditModal({ ...item })}
+                        className="p-1.5 text-amber-600 hover:bg-amber-50 rounded-lg transition-colors cursor-pointer"
+                        title="Chỉnh sửa mã lỗi"
+                      >
+                        <Edit3 className="w-4 h-4 inline" />
+                      </button>
+                      <button
+                        onClick={() => handleDeleteErrorCode(item.code, item.description)}
+                        className="p-1.5 text-rose-600 hover:bg-rose-50 rounded-lg transition-colors cursor-pointer"
+                        title="Xóa mã lỗi"
+                      >
+                        <Trash2 className="w-4 h-4 inline" />
+                      </button>
+                    </td>
+                  )}
                 </tr>
               ))}
             </tbody>
           </table>
         </div>
       </div>
+
+      {editModal && (
+        <div className="fixed inset-0 z-50 bg-black/40 flex items-center justify-center p-4">
+          <div className="bg-white rounded-2xl max-w-lg w-full p-6 shadow-2xl space-y-4">
+            <div className="flex items-center justify-between border-b pb-3">
+              <h3 className="font-bold text-lg">Chỉnh sửa Mã lỗi: {editModal.code}</h3>
+              <button onClick={() => setEditModal(null)} className="p-1 text-slate-400 hover:text-slate-700 cursor-pointer">
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+            <form onSubmit={handleSaveEditError} className="space-y-3 text-sm">
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="text-xs font-semibold text-slate-600">Nguồn danh mục</label>
+                  <select
+                    value={editModal.source_type}
+                    onChange={(e) => setEditModal({ ...editModal, source_type: e.target.value })}
+                    className="mt-1 w-full rounded-xl border border-slate-300 px-3 py-2 bg-white"
+                  >
+                    <option value="PHU_LUC_3">Phụ lục 3 (290 mã)</option>
+                    <option value="GOI_Y_MO_RONG">Gợi ý mở rộng (828 mã)</option>
+                  </select>
+                </div>
+                <div>
+                  <label className="text-xs font-semibold text-slate-600">Cấp độ lỗi</label>
+                  <select
+                    value={editModal.level_name}
+                    onChange={(e) => setEditModal({ ...editModal, level_name: e.target.value })}
+                    className="mt-1 w-full rounded-xl border border-slate-300 px-3 py-2 bg-white"
+                  >
+                    <option value="Mức I">Mức I (-1đ)</option>
+                    <option value="Mức II">Mức II (-2đ)</option>
+                    <option value="Mức III">Mức III (-3đ)</option>
+                    <option value="Mức IV">Mức IV (-5đ)</option>
+                    <option value="Mức V">Mức V (-10đ)</option>
+                  </select>
+                </div>
+              </div>
+              <div>
+                <label className="text-xs font-semibold text-slate-600">Điểm trừ (ví dụ -2)</label>
+                <input
+                  type="number"
+                  step="0.5"
+                  value={editModal.points}
+                  onChange={(e) => setEditModal({ ...editModal, points: Number(e.target.value) })}
+                  className="mt-1 w-full rounded-xl border border-slate-300 px-3 py-2"
+                />
+              </div>
+              <div>
+                <label className="text-xs font-semibold text-slate-600">Nội dung chi tiết lỗi *</label>
+                <textarea
+                  required
+                  rows={3}
+                  value={editModal.description}
+                  onChange={(e) => setEditModal({ ...editModal, description: e.target.value })}
+                  className="mt-1 w-full rounded-xl border border-slate-300 px-3 py-2"
+                />
+              </div>
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="text-xs font-semibold text-slate-600">Phạm vi</label>
+                  <input
+                    value={editModal.scope || ''}
+                    onChange={(e) => setEditModal({ ...editModal, scope: e.target.value })}
+                    className="mt-1 w-full rounded-xl border border-slate-300 px-3 py-2"
+                  />
+                </div>
+                <div>
+                  <label className="text-xs font-semibold text-slate-600">Nhóm áp dụng (1..6)</label>
+                  <input
+                    value={editModal.applicable_groups || ''}
+                    onChange={(e) => setEditModal({ ...editModal, applicable_groups: e.target.value })}
+                    className="mt-1 w-full rounded-xl border border-slate-300 px-3 py-2"
+                  />
+                </div>
+              </div>
+              <div className="flex justify-end gap-2 pt-3 border-t">
+                <button
+                  type="button"
+                  onClick={() => setEditModal(null)}
+                  className="px-4 py-2 rounded-xl border border-slate-300 text-slate-700 font-semibold cursor-pointer"
+                >
+                  Hủy
+                </button>
+                <button
+                  type="submit"
+                  className="px-4 py-2 rounded-xl bg-[#9E1B32] text-white font-semibold cursor-pointer"
+                >
+                  Lưu thay đổi
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      <DeleteConfirmModal deleteConfirm={deleteConfirm} onCancel={() => setDeleteConfirm(null)} />
     </div>
   );
 }

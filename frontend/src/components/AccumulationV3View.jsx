@@ -3,9 +3,9 @@ import { apiFetch } from '../api';
 import { fmtMoney, fmtNum, ratingBadgeClass } from '../utils/format';
 import { useGSAP, runReducedMotionAware, animateTabContentEnter } from '../utils/gsapSetup';
 import SlidingTabs from './SlidingTabs';
-import { Layers, Printer, Save, X, Edit3 } from 'lucide-react';
+import { Layers, Printer, Save, X, Edit3, AlertTriangle } from 'lucide-react';
 
-export default function AccumulationV3View({ onNavigate, notify }) {
+export default function AccumulationV3View({ selectedYear = 2026, onNavigate, notify }) {
   const [data, setData] = useState(null);
   const [includeOpen, setIncludeOpen] = useState(false);
   const [subTab, setSubTab] = useState('year'); // 'months' | 'quarters' | 'year'
@@ -21,14 +21,15 @@ export default function AccumulationV3View({ onNavigate, notify }) {
     }
     if (!tabPanelRef.current) return;
     return runReducedMotionAware(() => {
-      animateTabContentEnter(tabPanelRef.current, { y: 10, duration: 0.28 });
+      animateTabContentEnter(tabPanelRef.current, { y: 4, duration: 0.36 });
     });
   }, { dependencies: [subTab] });
 
   const load = async (incOpen = includeOpen) => {
     setLoading(true);
     try {
-      const res = await apiFetch(`/api/payroll/tich-luy-v3?year_num=2026&include_open=${incOpen}`);
+      const yr = selectedYear || 2026;
+      const res = await apiFetch(`/api/payroll/tich-luy-v3?year_num=${yr}&include_open=${incOpen}`);
       setData(res);
     } catch (err) {
       notify(err.message, 'error');
@@ -39,7 +40,7 @@ export default function AccumulationV3View({ onNavigate, notify }) {
 
   useEffect(() => {
     load(includeOpen);
-  }, [includeOpen]);
+  }, [includeOpen, selectedYear]);
 
   const saveHistoryCell = async (e) => {
     e.preventDefault();
@@ -48,7 +49,7 @@ export default function AccumulationV3View({ onNavigate, notify }) {
       await apiFetch('/api/payroll/tich-luy-v3/cell', {
         method: 'PUT',
         body: JSON.stringify({
-          year_num: data?.year_num || 2026,
+          year_num: data?.year_num || selectedYear || 2026,
           month_num: Number(editCell.month_num),
           emp_code: editCell.emp_code,
           kpi_score: editCell.kpi_score === '' ? null : Number(editCell.kpi_score),
@@ -193,7 +194,16 @@ export default function AccumulationV3View({ onNavigate, notify }) {
                         <td className="px-3 py-2.5 text-right tabular-nums font-extrabold text-[#9E1B32] bg-rose-50/50">
                           {fmtMoney(y.v3_amount)}
                         </td>
-                        <td className="px-3 py-2.5 text-[11px] text-slate-600">{y.status_note}</td>
+                        <td className="px-3 py-2 text-center text-xs">
+                          {y.v2_received > y.v2_qt + 10 ? (
+                            <div className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-black bg-rose-100 text-rose-800 border border-rose-300 shadow-xs">
+                              <AlertTriangle className="w-3.5 h-3.5 shrink-0 text-rose-600" />
+                              <span>[Chi vượt: -{fmtMoney(Math.abs(y.v2_received - y.v2_qt))} đ]</span>
+                            </div>
+                          ) : (
+                            <span className="text-[11px] text-slate-600 font-medium">{y.status_note}</span>
+                          )}
+                        </td>
                       </tr>
                     );
                   })
@@ -359,9 +369,11 @@ export default function AccumulationV3View({ onNavigate, notify }) {
             <form onSubmit={saveHistoryCell} className="p-5 space-y-3 text-sm">
               <div className="grid grid-cols-2 gap-3">
                 <div>
-                  <label className="block text-xs font-bold text-slate-700 mb-1">Điểm KPI Tháng</label>
+                  <label className="block text-xs font-bold text-slate-700 mb-1">Điểm KPI Tháng (0–100)</label>
                   <input
                     type="number"
+                    min="0"
+                    max="100"
                     step="0.01"
                     value={editCell.kpi_score}
                     onChange={(e) => setEditCell({ ...editCell, kpi_score: e.target.value })}
@@ -369,9 +381,11 @@ export default function AccumulationV3View({ onNavigate, notify }) {
                   />
                 </div>
                 <div>
-                  <label className="block text-xs font-bold text-slate-700 mb-1">Ngày công thực tế</label>
+                  <label className="block text-xs font-bold text-slate-700 mb-1">Ngày công thực tế (0–31)</label>
                   <input
                     type="number"
+                    min="0"
+                    max="31"
                     step="0.5"
                     value={editCell.workdays}
                     onChange={(e) => setEditCell({ ...editCell, workdays: e.target.value })}
@@ -382,6 +396,7 @@ export default function AccumulationV3View({ onNavigate, notify }) {
                   <label className="block text-xs font-bold text-slate-700 mb-1">Lương V2 đã lĩnh (đ)</label>
                   <input
                     type="number"
+                    min="0"
                     step="1"
                     value={editCell.v2_paid}
                     onChange={(e) => setEditCell({ ...editCell, v2_paid: e.target.value })}
@@ -392,6 +407,7 @@ export default function AccumulationV3View({ onNavigate, notify }) {
                   <label className="block text-xs font-bold text-slate-700 mb-1">Lương V1 thực lĩnh (đ)</label>
                   <input
                     type="number"
+                    min="0"
                     step="1"
                     value={editCell.v1_paid}
                     onChange={(e) => setEditCell({ ...editCell, v1_paid: e.target.value })}

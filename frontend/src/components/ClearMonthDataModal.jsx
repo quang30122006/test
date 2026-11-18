@@ -62,8 +62,8 @@ export default function ClearMonthDataModal({ initialPeriodCode, periodSummaryMa
     return runReducedMotionAware(() => {
       gsap.fromTo(
         modalCardRef.current,
-        { scale: 0.94, y: 14, autoAlpha: 0 },
-        { scale: 1, y: 0, autoAlpha: 1, duration: 0.28, ease: 'back.out(1.6)', clearProps: 'transform,opacity,visibility' }
+        { scale: 0.98, y: 6, autoAlpha: 0 },
+        { scale: 1, y: 0, autoAlpha: 1, duration: 0.35, ease: 'power2.out', clearProps: 'transform,opacity,visibility' }
       );
     });
   }, { scope: modalCardRef });

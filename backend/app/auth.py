@@ -32,7 +32,7 @@ def verify_password(password: str, stored_hash: str) -> bool:
             return hmac.compare_digest(dk.hex(), hex_dk)
         except Exception:
             return False
-    return hmac.compare_digest(password, stored_hash)
+    return False
 
 
 def create_access_token(role: str, subject: str, emp_code: Optional[str] = None, full_name: str = "") -> str:

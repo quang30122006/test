@@ -55,8 +55,7 @@ export default function DatabaseExplorerView({ notify }) {
     if (reduced || isFirstTableRef.current) {
       gsap.set(bar, target);
     } else {
-      gsap.to(bar, { ...target, duration: 0.3, ease: 'power3.out', overwrite: 'auto' });
-      animateSelectionPop(btn, 0.985);
+      gsap.to(bar, { ...target, duration: 0.36, ease: 'power2.out', overwrite: 'auto' });
     }
   }, { scope: listWrapRef, dependencies: [selectedTable, overview?.tables?.length] });
 
@@ -67,7 +66,7 @@ export default function DatabaseExplorerView({ notify }) {
     }
     if (!panelRef.current || loading) return;
     return runReducedMotionAware(() => {
-      animateTabContentEnter(panelRef.current, { y: 10, duration: 0.25 });
+      animateTabContentEnter(panelRef.current, { y: 4, duration: 0.36 });
     });
   }, { dependencies: [selectedTable, loading] });
 

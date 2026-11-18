@@ -1,9 +1,9 @@
-import React, { useRef, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import {
   LayoutGrid, Settings2, CalendarDays, Users, Target, ShieldAlert, BookOpen, Lock, Database,
   Upload, FileSpreadsheet, ClipboardCheck, TrendingUp, AlertTriangle, FileText, ShieldCheck,
-  Award, Wallet, Layers, Printer, BarChart3, History, UserCheck, LogOut, KeyRound, ChevronRight, Menu, X,
-  Search, PanelLeftClose, PanelLeftOpen
+  Award, Wallet, Layers, Printer, BarChart3, History, UserCheck, LogOut, KeyRound, ChevronRight, ChevronDown, Menu, X,
+  Search, PanelLeftClose, PanelLeftOpen, ArrowLeft
 } from 'lucide-react';
 import { periodStatusBadge } from '../utils/format';
 import { gsap, useGSAP, runReducedMotionAware, animateSelectionPop, animateTabContentEnter } from '../utils/gsapSetup';
@@ -82,6 +82,9 @@ export default function Layout({
   periods,
   selectedPeriod,
   onChangePeriod,
+  selectedYear,
+  onChangeYear,
+  availableYears = [],
   ksvPendingCount = 0,
   onOpenChangePassword,
   onLogout,
@@ -91,9 +94,12 @@ export default function Layout({
   const [menuQuery, setMenuQuery] = useState('');
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
-  const [hoverPreview, setHoverPreview] = useState(null); // { blk, left, top, pinned }
-  const hoverTimerRef = useRef(null);
-  const touchCardRef = useRef(null);
+  const [compactPopover, setCompactPopover] = useState(null); // { blk, top } khi sidebarCollapsed === true
+  const [expandedBlocks, setExpandedBlocks] = useState(() => {
+    const cur = ADMIN_BLOCKS.find((b) => b.items.some((it) => it.key === activeView));
+    return cur ? [cur.id] : [];
+  });
+  const compactPopRef = useRef(null);
   const mainRef = useRef(null);
   const periodBoxRef = useRef(null);
   const isFirstPeriodRef = useRef(true);
@@ -104,49 +110,31 @@ export default function Layout({
 
   const curPeriodObj = periods.find((p) => p.period_code === selectedPeriod);
 
-  const cancelClose3DTouch = () => {
-    if (hoverTimerRef.current) {
-      clearTimeout(hoverTimerRef.current);
-      hoverTimerRef.current = null;
+  // Tự động mở rộng khối chứa màn hình đang hoạt động
+  useEffect(() => {
+    const cur = ADMIN_BLOCKS.find((b) => b.items.some((it) => it.key === activeView));
+    if (cur) {
+      setExpandedBlocks((prev) => (prev.includes(cur.id) ? prev : [...prev, cur.id]));
     }
+  }, [activeView]);
+
+  const toggleBlock = (blkId) => {
+    setExpandedBlocks((prev) => (prev.includes(blkId) ? prev.filter((id) => id !== blkId) : [...prev, blkId]));
   };
 
-  const compute3DTouchPos = (blk, targetEl) => {
-    const rect = targetEl.getBoundingClientRect();
-    const estHeight = 64 + blk.items.length * 58;
-    const maxTop = Math.max(12, window.innerHeight - Math.min(estHeight, window.innerHeight - 24) - 12);
-    const clampedTop = gsap.utils.clamp(12, maxTop, rect.top - 10);
-    const clampedLeft = Math.min(Math.round(rect.right + 10), Math.max(12, window.innerWidth - 350));
-    return { top: Math.round(clampedTop), left: clampedLeft };
-  };
-
-  const open3DTouch = (blk, e, pinned = false) => {
-    cancelClose3DTouch();
-    const pos = compute3DTouchPos(blk, e.currentTarget);
-    setHoverPreview({ blk, ...pos, pinned });
-  };
-
-  const handleClickBlock = (blk, e) => {
-    cancelClose3DTouch();
-    if (hoverPreview?.blk?.id === blk.id && hoverPreview?.pinned) {
-      setHoverPreview(null);
-      return;
-    }
-    open3DTouch(blk, e, true);
-  };
-
-  const scheduleClose3DTouch = () => {
-    cancelClose3DTouch();
-    hoverTimerRef.current = setTimeout(() => {
-      setHoverPreview((prev) => (prev?.pinned ? prev : null));
-    }, 160);
+  const handleCollapsedBlockClick = (blk, e) => {
+    const rect = e.currentTarget.getBoundingClientRect();
+    const estHeight = 48 + blk.items.length * 44;
+    const maxTop = Math.max(12, window.innerHeight - estHeight - 12);
+    const top = Math.min(Math.max(12, Math.round(rect.top)), maxTop);
+    setCompactPopover((prev) => (prev?.blk?.id === blk.id ? null : { blk, top }));
   };
 
   useGSAP(() => {
     const el = mainRef.current?.querySelector('.view-stage');
     if (!el) return;
     return runReducedMotionAware(() => {
-      animateTabContentEnter(el, { y: 12, scale: 0.993, duration: 0.3 });
+      animateTabContentEnter(el, { y: 4, scale: 1, duration: 0.38 });
     });
   }, { scope: mainRef, dependencies: [activeView] });
 
@@ -155,7 +143,7 @@ export default function Layout({
       isFirstPeriodRef.current = false;
       return;
     }
-    if (periodBoxRef.current) animateSelectionPop(periodBoxRef.current, 0.965);
+    if (periodBoxRef.current) animateSelectionPop(periodBoxRef.current, 0.985);
   }, { dependencies: [selectedPeriod] });
 
   useGSAP(() => {
@@ -170,27 +158,20 @@ export default function Layout({
     if (!shouldAnimate || reduced) {
       gsap.set(pill, target);
     } else {
-      gsap.to(pill, { ...target, duration: 0.32, ease: 'power3.out', overwrite: 'auto' });
-      animateSelectionPop(btn, 0.965);
+      gsap.to(pill, { ...target, duration: 0.38, ease: 'power2.out', overwrite: 'auto' });
     }
   }, { scope: staffNavRef, dependencies: [activeView, sidebarCollapsed, user?.role] });
 
   useGSAP(() => {
-    if (!hoverPreview || !touchCardRef.current) return;
+    if (!compactPopover || !compactPopRef.current) return;
     return runReducedMotionAware(() => {
-      const tl = gsap.timeline({ defaults: { clearProps: 'transform,opacity,visibility' } });
-      tl.fromTo(
-        touchCardRef.current,
-        { scale: 0.9, x: -12, rotateY: -8, transformPerspective: 900, transformOrigin: 'left center', autoAlpha: 0 },
-        { scale: 1, x: 0, rotateY: 0, autoAlpha: 1, duration: 0.28, ease: 'back.out(1.6)' }
-      ).fromTo(
-        '.touch-item',
-        { x: -6, autoAlpha: 0 },
-        { x: 0, autoAlpha: 1, duration: 0.2, stagger: 0.022, ease: 'power2.out' },
-        '-=0.16'
+      gsap.fromTo(
+        compactPopRef.current,
+        { scale: 0.98, x: -6, autoAlpha: 0 },
+        { scale: 1, x: 0, autoAlpha: 1, duration: 0.22, ease: 'power2.out', clearProps: 'transform,opacity,visibility' }
       );
     });
-  }, { scope: touchCardRef, dependencies: [hoverPreview?.blk?.id], revertOnUpdate: true });
+  }, { scope: compactPopRef, dependencies: [compactPopover?.blk?.id] });
 
   const qMenu = menuQuery.trim().toLowerCase();
 
@@ -271,7 +252,12 @@ export default function Layout({
                 { id: 'block4', label: 'K4' },
               ]}
               value={blockFilter}
-              onChange={setBlockFilter}
+              onChange={(nextFilter) => {
+                setBlockFilter(nextFilter);
+                if (nextFilter !== 'ALL') {
+                  setExpandedBlocks([nextFilter]);
+                }
+              }}
               className="grid grid-cols-5 gap-1 p-0.5 bg-slate-100 rounded-lg text-[10px]"
               buttonClassName="py-1 px-1 rounded-md text-[10px] font-bold"
               pillClassName="bg-[#9E1B32] shadow-xs rounded-md"
@@ -284,7 +270,11 @@ export default function Layout({
           {user.role === 'ADMIN' ? (
             <>
               <button
-                onClick={() => { onNavigate('menu_hub'); setHoverPreview(null); setMobileMenuOpen(false); }}
+                onClick={() => {
+                  onNavigate('menu_hub');
+                  setExpandedBlocks([]);
+                  setMobileMenuOpen(false);
+                }}
                 title="Tổng quan Điều hành (Màn hình chính)"
                 className={`w-full flex items-center ${sidebarCollapsed ? 'justify-center px-2' : 'gap-2.5 px-3'} py-2 rounded-xl text-xs sm:text-sm font-bold transition cursor-pointer ${
                   activeView === 'menu_hub'
@@ -313,16 +303,16 @@ export default function Layout({
                             key={item.key}
                             onClick={() => {
                               onNavigate(item.key);
-                              setHoverPreview(null);
+                              setCompactPopover(null);
                               setMobileMenuOpen(false);
                             }}
-                            className={`w-full flex items-center gap-2 px-2.5 py-2 rounded-lg text-[12.5px] font-medium transition text-left cursor-pointer ${
+                            className={`w-full flex items-center gap-2 px-2.5 py-2 rounded-lg text-xs font-medium transition text-left cursor-pointer ${
                               isActive
-                                ? 'bg-rose-50 text-[#9E1B32] font-semibold border border-rose-200'
+                                ? 'bg-[#9E1B32] text-white font-bold shadow-xs'
                                 : 'text-slate-700 hover:bg-slate-100'
                             }`}
                           >
-                            <Icon className="w-4 h-4 shrink-0 text-[#9E1B32]" />
+                            <Icon className={`w-4 h-4 shrink-0 ${isActive ? 'text-white' : 'text-[#9E1B32]'}`} />
                             <span className="truncate">{item.label}</span>
                           </button>
                         );
@@ -331,57 +321,94 @@ export default function Layout({
                 </div>
               ) : (
                 ADMIN_BLOCKS.filter((blk) => blockFilter === 'ALL' || blk.id === blockFilter).map((blk, bIdx) => {
-                  const isHovered = hoverPreview?.blk?.id === blk.id;
+                  const isExpanded = expandedBlocks.includes(blk.id);
                   const containsActive = blk.items.some((it) => it.key === activeView);
                   const blkPendingBadge = blk.id === 'block2' ? ksvPendingCount : 0;
                   const shortIcons = [Settings2, Database, Wallet, BarChart3];
                   const BlkIcon = shortIcons[bIdx] || LayoutGrid;
-                  return (
-                    <div
-                      key={blk.id}
-                      className="pt-0.5"
-                      onMouseEnter={(e) => open3DTouch(blk, e, false)}
-                      onMouseLeave={scheduleClose3DTouch}
-                    >
-                      {sidebarCollapsed ? (
+
+                  if (sidebarCollapsed) {
+                    return (
+                      <div key={blk.id} className="pt-0.5">
                         <button
-                          onClick={(e) => handleClickBlock(blk, e)}
+                          onClick={(e) => handleCollapsedBlockClick(blk, e)}
                           title={blk.short}
-                          className={`w-full flex items-center justify-center p-2.5 rounded-xl transition cursor-pointer ${
-                            isHovered || containsActive
-                              ? 'bg-rose-50 text-[#9E1B32] shadow-sm scale-[1.03] border border-rose-200'
+                          className={`w-full flex items-center justify-center p-2.5 rounded-xl transition-colors duration-200 cursor-pointer ${
+                            containsActive || compactPopover?.blk?.id === blk.id
+                              ? 'bg-rose-50 text-[#9E1B32] shadow-xs border border-rose-200'
                               : 'text-slate-600 hover:bg-slate-100'
                           }`}
                         >
                           <BlkIcon className="w-4 h-4" />
                         </button>
-                      ) : (
-                        <button
-                          onClick={(e) => handleClickBlock(blk, e)}
-                          className={`w-full flex items-center justify-between px-2.5 py-2.5 rounded-xl text-[11px] font-extrabold uppercase tracking-wider transition-all duration-150 cursor-pointer ${
-                            isHovered
-                              ? 'bg-white shadow-md scale-[1.02] border border-slate-200 text-slate-900'
-                              : containsActive
-                              ? 'bg-rose-50/80 text-slate-900 border border-rose-200'
-                              : 'text-slate-500 hover:text-slate-800 hover:bg-slate-50 border border-transparent'
+                      </div>
+                    );
+                  }
+
+                  return (
+                    <div key={blk.id} className="pt-0.5">
+                      <button
+                        onClick={() => toggleBlock(blk.id)}
+                        className={`w-full flex items-center justify-between px-2.5 py-2 rounded-xl text-[11px] font-extrabold uppercase tracking-wider transition-colors duration-200 cursor-pointer ${
+                          containsActive
+                            ? 'bg-rose-50/90 text-slate-900 border border-rose-200/90'
+                            : 'text-slate-600 hover:text-slate-900 hover:bg-slate-100/70 border border-transparent'
+                        }`}
+                      >
+                        <span className="flex items-center gap-1.5 min-w-0 truncate">
+                          <BlkIcon className="w-3.5 h-3.5 shrink-0 text-slate-400" />
+                          <span className={`${blk.color} truncate`}>{blk.short}</span>
+                          {containsActive && (
+                            <span className="w-1.5 h-1.5 rounded-full bg-[#9E1B32] shrink-0" title="Khối đang chọn" />
+                          )}
+                          {blkPendingBadge > 0 && (
+                            <span className="px-1.5 py-0.2 rounded-full text-[9px] bg-amber-500 text-white font-bold">
+                              {blkPendingBadge}
+                            </span>
+                          )}
+                        </span>
+                        <ChevronDown
+                          className={`w-3.5 h-3.5 text-slate-400 transition-transform duration-200 shrink-0 ${
+                            isExpanded ? 'rotate-180 text-[#9E1B32]' : ''
                           }`}
-                        >
-                          <span className="flex items-center gap-1.5 min-w-0 truncate">
-                            <span className={`${blk.color} truncate`}>{blk.short}</span>
-                            {containsActive && (
-                              <span className="w-1.5 h-1.5 rounded-full bg-[#9E1B32] shrink-0" title="Khối đang mở" />
-                            )}
-                            {blkPendingBadge > 0 && (
-                              <span className="px-1.5 py-0.2 rounded-full text-[9px] bg-amber-500 text-white font-bold">
-                                {blkPendingBadge}
-                              </span>
-                            )}
-                          </span>
-                          <span className="flex items-center gap-1 shrink-0">
-                            <span className="text-[10px] font-semibold text-slate-400">{blk.items.length}</span>
-                            <ChevronRight className={`w-3.5 h-3.5 transition-transform ${isHovered ? 'translate-x-0.5 text-[#9E1B32]' : ''}`} />
-                          </span>
-                        </button>
+                        />
+                      </button>
+
+                      {/* Accordion cây thư mục trong sidebar */}
+                      {isExpanded && (
+                        <div className="ml-3 pl-2.5 my-1 border-l-2 border-slate-200/80 space-y-0.5">
+                          {blk.items.map((item) => {
+                            const Icon = item.icon;
+                            const isActive = activeView === item.key;
+                            const badgeVal = item.badgeKey === 'ksvPending' ? ksvPendingCount : 0;
+                            return (
+                              <button
+                                key={item.key}
+                                onClick={() => {
+                                  onNavigate(item.key);
+                                  setMobileMenuOpen(false);
+                                }}
+                                className={`w-full flex items-center justify-between gap-2 px-2.5 py-1.5 rounded-lg text-xs transition cursor-pointer text-left ${
+                                  isActive
+                                    ? 'bg-[#9E1B32] text-white font-bold shadow-xs'
+                                    : 'text-slate-600 hover:bg-slate-100/80 hover:text-slate-900 font-medium'
+                                }`}
+                              >
+                                <div className="flex items-center gap-2 min-w-0 truncate">
+                                  <Icon className={`w-3.5 h-3.5 shrink-0 ${isActive ? 'text-white' : 'text-slate-400'}`} />
+                                  <span className="truncate">{item.label}</span>
+                                </div>
+                                {badgeVal > 0 && (
+                                  <span className={`px-1.5 py-0.2 text-[9px] font-bold rounded-full shrink-0 ${
+                                    isActive ? 'bg-white text-[#9E1B32]' : 'bg-amber-500 text-white'
+                                  }`}>
+                                    {badgeVal}
+                                  </span>
+                                )}
+                              </button>
+                            );
+                          })}
+                        </div>
                       )}
                     </div>
                   );
@@ -454,18 +481,34 @@ export default function Layout({
       <div className="flex-1 flex flex-col min-w-0">
         {/* Top bar */}
         <header className="no-print sticky top-0 z-30 bg-white/95 backdrop-blur border-b border-slate-200 px-4 sm:px-6 py-3 flex flex-wrap items-center justify-between gap-3">
-          <div className="flex items-center gap-3">
+          <div className="flex items-center gap-2.5">
             <button
               onClick={() => setMobileMenuOpen(true)}
-              className="lg:hidden p-2 rounded-lg border border-slate-200 text-slate-600 hover:bg-slate-100"
+              className="lg:hidden p-2 rounded-lg border border-slate-200 text-slate-600 hover:bg-slate-100 cursor-pointer"
             >
               <Menu className="w-5 h-5" />
             </button>
+
+            {/* Nút Quay lại Tổng quan khi đang ở view con */}
+            {user.role === 'ADMIN' && activeView !== 'menu_hub' && (
+              <button
+                onClick={() => {
+                  onNavigate('menu_hub');
+                  setExpandedBlocks([]);
+                }}
+                title="Quay lại Trung tâm Điều hành"
+                className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-slate-100 hover:bg-rose-50 hover:text-[#9E1B32] text-xs font-bold text-slate-700 transition cursor-pointer border border-slate-200 shadow-xs shrink-0"
+              >
+                <ArrowLeft className="w-3.5 h-3.5" />
+                <span className="hidden sm:inline">Tổng quan</span>
+              </button>
+            )}
+
             <div>
-              <div className="text-xs text-slate-500 font-medium">
+              <div className="text-[11.5px] text-slate-500 font-medium truncate max-w-[280px] sm:max-w-md">
                 {user.org_name || 'NGÂN HÀNG NÔNG NGHIỆP & PTNT VIỆT NAM - CHI NHÁNH QUẢNG BÌNH'}
               </div>
-              <div className="text-sm sm:text-base font-bold text-slate-900">
+              <div className="text-sm sm:text-base font-extrabold text-slate-900 truncate">
                 {user.role === 'ADMIN'
                   ? (activeView === 'menu_hub'
                       ? 'Trung tâm Điều hành & Thống kê 3P (Màn hình chính)'
@@ -476,8 +519,23 @@ export default function Layout({
           </div>
 
           <div className="flex items-center gap-2.5">
+            {availableYears && availableYears.length > 0 && (
+              <div className="flex items-center gap-1.5 bg-slate-50 border border-slate-200 rounded-xl px-2.5 py-1.5 shadow-xs">
+                <span className="text-xs font-bold text-slate-500">Năm:</span>
+                <select
+                  value={selectedYear}
+                  onChange={(e) => onChangeYear && onChangeYear(Number(e.target.value))}
+                  className="text-xs sm:text-sm font-black text-emerald-900 bg-transparent focus:outline-none cursor-pointer"
+                >
+                  {availableYears.map((yr) => (
+                    <option key={yr} value={yr}>Năm {yr}</option>
+                  ))}
+                </select>
+              </div>
+            )}
+
             {periods.length > 0 && (
-              <div ref={periodBoxRef} className="flex items-center gap-2 bg-slate-50 border border-slate-200 rounded-xl px-3 py-1.5">
+              <div ref={periodBoxRef} className="flex items-center gap-2 bg-slate-50 border border-slate-200 rounded-xl px-3 py-1.5 shadow-xs">
                 <CalendarDays className="w-4 h-4 text-[#9E1B32]" />
                 <span className="text-xs font-semibold text-slate-500 hidden sm:inline">Kỳ làm việc:</span>
                 <select
@@ -485,10 +543,12 @@ export default function Layout({
                   onChange={(e) => onChangePeriod(e.target.value)}
                   className="text-xs sm:text-sm font-bold text-slate-800 bg-transparent focus:outline-none cursor-pointer"
                 >
-                  {periods.map((p) => (
-                    <option key={p.period_code} value={p.period_code}>
-                      {p.period_name} ({p.status})
-                    </option>
+                  {periods
+                    .filter((p) => !selectedYear || (p.year_num || parseInt(p.period_code.split('-')[0], 10)) === selectedYear)
+                    .map((p) => (
+                      <option key={p.period_code} value={p.period_code}>
+                        {p.period_name} ({p.status})
+                      </option>
                   ))}
                 </select>
                 {curPeriodObj && (
@@ -508,71 +568,54 @@ export default function Layout({
         </main>
       </div>
 
-      {/* 3D Touch Hover Popover cho 4 Khối Sidebar */}
-      {hoverPreview && user.role === 'ADMIN' && (
+      {/* Popover gọn gàng cho chế độ thanh bên thu gọn (Collapsed Sidebar) */}
+      {compactPopover && user.role === 'ADMIN' && (
         <>
           <div
-            onClick={() => setHoverPreview(null)}
-            className={`no-print fixed inset-0 z-40 bg-slate-900/10 backdrop-blur-[1px] ${
-              hoverPreview.pinned ? 'pointer-events-auto' : 'pointer-events-none'
-            }`}
+            onClick={() => setCompactPopover(null)}
+            className="no-print fixed inset-0 z-40 bg-slate-900/10 backdrop-blur-[1px]"
           />
           <div
-            ref={touchCardRef}
-            onMouseEnter={cancelClose3DTouch}
-            onMouseLeave={scheduleClose3DTouch}
-            style={{ top: `${hoverPreview.top}px`, left: `${hoverPreview.left}px` }}
-            className={`no-print fixed z-50 w-[335px] max-w-[90vw] rounded-2xl bg-white/95 backdrop-blur-xl shadow-2xl border ring-4 ${
-              blockAccent[hoverPreview.blk.id].ring
-            } overflow-visible before:content-[''] before:absolute before:-left-4 before:inset-y-0 before:w-5`}
+            ref={compactPopRef}
+            style={{ top: `${compactPopover.top}px`, left: '80px' }}
+            className="no-print fixed z-50 w-72 rounded-2xl bg-white shadow-2xl border border-slate-200 overflow-hidden"
           >
-            <div className="rounded-2xl overflow-hidden">
-              <div className={`bg-gradient-to-r ${blockAccent[hoverPreview.blk.id].header} text-white px-4 py-2.5 flex items-center justify-between`}>
-                <span className="font-extrabold text-xs tracking-wide">{hoverPreview.blk.title}</span>
-                <span className="text-[10px] bg-white/20 px-2 py-0.5 rounded-full font-bold shrink-0">
-                  {hoverPreview.blk.items.length} mục
-                </span>
-              </div>
-              <div className="p-2 space-y-1 max-h-[calc(100vh-88px)] overflow-y-auto">
-                {hoverPreview.blk.items.map((item) => {
-                  const Icon = item.icon;
-                  const isActive = activeView === item.key;
-                  const badgeVal = item.badgeKey === 'ksvPending' ? ksvPendingCount : 0;
-                  return (
-                    <button
-                      key={item.key}
-                      onClick={() => {
-                        onNavigate(item.key);
-                        setHoverPreview(null);
-                        setMobileMenuOpen(false);
-                      }}
-                      className={`touch-item w-full flex items-center justify-between gap-2.5 px-3 py-2 rounded-xl text-left transition cursor-pointer group ${
-                        isActive
-                          ? 'bg-rose-50 border border-rose-200 text-[#9E1B32]'
-                          : 'hover:bg-slate-50 border border-transparent hover:border-slate-200/80 text-slate-800'
-                      }`}
-                    >
-                      <div className="flex items-center gap-2.5 min-w-0">
-                        <div className={`p-1.5 rounded-lg shrink-0 ${blockAccent[hoverPreview.blk.id].pill}`}>
-                          <Icon className="w-4 h-4" />
-                        </div>
-                        <div className="min-w-0">
-                          <div className="text-xs font-bold flex items-center gap-1.5 truncate group-hover:text-[#9E1B32]">
-                            <span className="truncate">{item.label}</span>
-                            {badgeVal > 0 && (
-                              <span className="px-1.5 py-0.2 text-[10px] rounded-full bg-amber-500 text-white font-bold shrink-0">
-                                {badgeVal}
-                              </span>
-                            )}
-                          </div>
-                          <div className="text-[11px] text-slate-500 truncate">{item.desc}</div>
-                        </div>
-                      </div>
-                      <ChevronRight className="w-3.5 h-3.5 text-slate-300 group-hover:text-[#9E1B32] group-hover:translate-x-0.5 transition shrink-0" />
-                    </button>
-                  );
-                })}
-              </div>
+            <div className={`bg-gradient-to-r ${blockAccent[compactPopover.blk.id].header} text-white px-3.5 py-2 flex items-center justify-between`}>
+              <span className="font-extrabold text-xs tracking-wide">{compactPopover.blk.title}</span>
+              <span className="text-[10px] bg-white/20 px-2 py-0.5 rounded-full font-bold shrink-0">
+                {compactPopover.blk.items.length} mục
+              </span>
+            </div>
+            <div className="p-1.5 space-y-0.5 max-h-[calc(100vh-120px)] overflow-y-auto">
+              {compactPopover.blk.items.map((item) => {
+                const Icon = item.icon;
+                const isActive = activeView === item.key;
+                const badgeVal = item.badgeKey === 'ksvPending' ? ksvPendingCount : 0;
+                return (
+                  <button
+                    key={item.key}
+                    onClick={() => {
+                      onNavigate(item.key);
+                      setCompactPopover(null);
+                    }}
+                    className={`w-full flex items-center justify-between gap-2 px-2.5 py-2 rounded-xl text-xs transition cursor-pointer text-left ${
+                      isActive
+                        ? 'bg-[#9E1B32] text-white font-bold shadow-xs'
+                        : 'hover:bg-slate-50 text-slate-700'
+                    }`}
+                  >
+                    <div className="flex items-center gap-2 min-w-0 truncate">
+                      <Icon className={`w-3.5 h-3.5 shrink-0 ${isActive ? 'text-white' : 'text-slate-400'}`} />
+                      <span className="truncate">{item.label}</span>
+                    </div>
+                    {badgeVal > 0 && (
+                      <span className="px-1.5 py-0.2 text-[9px] rounded-full bg-amber-500 text-white font-bold shrink-0">
+                        {badgeVal}
+                      </span>
+                    )}
+                  </button>
+                );
+              })}
             </div>
           </div>
         </>

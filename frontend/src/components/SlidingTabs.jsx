@@ -43,8 +43,8 @@ export default function SlidingTabs({
     gsap.to(pill, {
       ...target,
       autoAlpha: 1,
-      duration: 0.34,
-      ease: 'power3.out',
+      duration: 0.38,
+      ease: 'power2.out',
       overwrite: 'auto',
     });
   };
@@ -53,9 +53,6 @@ export default function SlidingTabs({
     const shouldAnimate = !isFirstRef.current;
     isFirstRef.current = false;
     syncPill(shouldAnimate);
-    if (shouldAnimate && btnRefs.current[value]) {
-      animateSelectionPop(btnRefs.current[value], 0.96);
-    }
   }, { scope: wrapRef, dependencies: [value, items.length] });
 
   useLayoutEffect(() => {

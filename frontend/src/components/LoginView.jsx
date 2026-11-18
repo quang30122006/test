@@ -56,9 +56,9 @@ export default function LoginView({ onLoginSuccess }) {
 
   useGSAP(() => {
     return runReducedMotionAware(() => {
-      const tl = gsap.timeline({ defaults: { ease: 'power3.out', clearProps: 'transform,opacity,visibility' } });
-      tl.from('.login-panel', { y: 18, autoAlpha: 0, duration: 0.45, stagger: 0.08 })
-        .from('.login-feature', { y: 12, autoAlpha: 0, duration: 0.35, stagger: 0.06 }, '-=0.25');
+      const tl = gsap.timeline({ defaults: { ease: 'power2.out', clearProps: 'transform,opacity,visibility' } });
+      tl.from('.login-panel', { y: 8, autoAlpha: 0, duration: 0.5, stagger: 0.06 })
+        .from('.login-feature', { y: 6, autoAlpha: 0, duration: 0.4, stagger: 0.04 }, '-=0.3');
     });
   }, { scope: containerRef });
 
@@ -69,7 +69,7 @@ export default function LoginView({ onLoginSuccess }) {
     }
     if (!formStageRef.current) return;
     return runReducedMotionAware(() => {
-      animateTabContentEnter(formStageRef.current, { y: 10, duration: 0.28 });
+      animateTabContentEnter(formStageRef.current, { y: 4, duration: 0.36 });
     });
   }, { scope: containerRef, dependencies: [tab] });
 

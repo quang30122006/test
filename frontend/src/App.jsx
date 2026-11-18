@@ -1,19 +1,11 @@
-import React, { useCallback, useEffect, useRef, useState } from 'react';
+import React, { Suspense, lazy, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { apiFetch, getToken, setToken } from './api';
 import { gsap, useGSAP, runReducedMotionAware, installTactileInteractions } from './utils/gsapSetup';
 import LoginView from './components/LoginView';
 import Layout from './components/Layout';
 import AdminMenuHub from './components/AdminMenuHub';
-import FormulaStudioView from './components/FormulaStudioView';
+import { TableSkeleton } from './components/Skeleton';
 import PeriodManagerView from './components/PeriodManagerView';
-import {
-  EmployeesCatalogView,
-  IndicatorsCatalogView,
-  InternalRulesCatalogView,
-  KpiErrorTreeCatalogView,
-} from './components/CatalogsViews';
-import SecurityView from './components/SecurityView';
-import DatasetManagerView from './components/DatasetManagerView';
 import ImportSalaryView from './components/ImportSalaryView';
 import ImportTargetsView from './components/ImportTargetsView';
 import AttendanceView from './components/AttendanceView';
@@ -23,12 +15,29 @@ import ViolationLogView from './components/ViolationLogView';
 import KsvQueueView from './components/KsvQueueView';
 import KpiMonthView from './components/KpiMonthView';
 import Payroll3PView from './components/Payroll3PView';
-import AccumulationV3View from './components/AccumulationV3View';
-import PrintReportsView from './components/PrintReportsView';
 import DashboardView from './components/DashboardView';
-import AuditLogView from './components/AuditLogView';
-import DatabaseExplorerView from './components/DatabaseExplorerView';
-import StaffPortalView from './components/StaffPortalView';
+
+// Heavy views converted to React.lazy()
+const FormulaStudioView = lazy(() => import('./components/FormulaStudioView'));
+const PrintReportsView = lazy(() => import('./components/PrintReportsView'));
+const DatasetManagerView = lazy(() => import('./components/DatasetManagerView'));
+const EmployeesCatalogView = lazy(() =>
+  import('./components/CatalogsViews').then((m) => ({ default: m.EmployeesCatalogView }))
+);
+const IndicatorsCatalogView = lazy(() =>
+  import('./components/CatalogsViews').then((m) => ({ default: m.IndicatorsCatalogView }))
+);
+const InternalRulesCatalogView = lazy(() =>
+  import('./components/CatalogsViews').then((m) => ({ default: m.InternalRulesCatalogView }))
+);
+const KpiErrorTreeCatalogView = lazy(() =>
+  import('./components/CatalogsViews').then((m) => ({ default: m.KpiErrorTreeCatalogView }))
+);
+const StaffPortalView = lazy(() => import('./components/StaffPortalView'));
+const AuditLogView = lazy(() => import('./components/AuditLogView'));
+const DatabaseExplorerView = lazy(() => import('./components/DatabaseExplorerView'));
+const SecurityView = lazy(() => import('./components/SecurityView'));
+const AccumulationV3View = lazy(() => import('./components/AccumulationV3View'));
 import { CheckCircle2, AlertTriangle, X, KeyRound } from 'lucide-react';
 
 export default function App() {
@@ -38,9 +47,20 @@ export default function App() {
   const [printEmpCode, setPrintEmpCode] = useState('');
   const [periods, setPeriods] = useState([]);
   const [selectedPeriod, setSelectedPeriod] = useState('2026-10');
+  const [selectedYear, setSelectedYear] = useState(() => {
+    const curYr = new Date().getFullYear();
+    return curYr >= 2024 && curYr <= 2030 ? curYr : 2026;
+  });
   const [currentPeriodCode, setCurrentPeriodCode] = useState('2026-10');
   const [ksvPendingCount, setKsvPendingCount] = useState(0);
   const [toast, setToast] = useState(null);
+
+  const availableYears = useMemo(() => {
+    const yrs = new Set(periods.map((p) => p.year_num || parseInt(p.period_code.split('-')[0], 10)));
+    if (selectedPeriod) yrs.add(parseInt(selectedPeriod.split('-')[0], 10));
+    if (yrs.size === 0) yrs.add(2026);
+    return Array.from(yrs).sort((a, b) => b - a);
+  }, [periods, selectedPeriod]);
 
   // Change password modal
   const [pwModalOpen, setPwModalOpen] = useState(false);
@@ -56,8 +76,8 @@ export default function App() {
     return runReducedMotionAware(() => {
       gsap.fromTo(
         pwModalRef.current,
-        { scale: 0.94, y: 14, autoAlpha: 0 },
-        { scale: 1, y: 0, autoAlpha: 1, duration: 0.28, ease: 'back.out(1.6)', clearProps: 'transform,opacity,visibility' }
+        { scale: 0.98, y: 6, autoAlpha: 0 },
+        { scale: 1, y: 0, autoAlpha: 1, duration: 0.35, ease: 'power2.out', clearProps: 'transform,opacity,visibility' }
       );
     });
   }, { dependencies: [pwModalOpen] });
@@ -66,10 +86,10 @@ export default function App() {
     if (!toast || !toastRef.current) return;
     return runReducedMotionAware(() => {
       gsap.from(toastRef.current, {
-        y: 16,
+        y: 8,
         autoAlpha: 0,
-        duration: 0.3,
-        ease: 'back.out(1.4)',
+        duration: 0.35,
+        ease: 'power2.out',
         clearProps: 'transform,opacity,visibility',
       });
     });
@@ -94,6 +114,8 @@ export default function App() {
       setCurrentPeriodCode(cur);
       const activeP = preferredPeriod || cur;
       setSelectedPeriod(activeP);
+      const yr = parseInt(activeP.split('-')[0], 10);
+      if (!isNaN(yr)) setSelectedYear(yr);
 
       const vRes = await apiFetch(`/api/operations/violations?period_code=${encodeURIComponent(activeP)}`);
       setKsvPendingCount(vRes?.ksv_summary?.pending_count || 0);
@@ -115,10 +137,11 @@ export default function App() {
     const onUnauthorized = () => {
       setUser(null);
       setActiveView('menu_hub');
+      notify('Phiên làm việc đã hết hạn. Vui lòng đăng nhập lại.', 'error');
     };
     window.addEventListener('agribank:unauthorized', onUnauthorized);
     return () => window.removeEventListener('agribank:unauthorized', onUnauthorized);
-  }, []);
+  }, [notify]);
 
   useEffect(() => {
     const restoreSession = async () => {
@@ -173,8 +196,23 @@ export default function App() {
 
   const handleChangePeriod = async (pcode) => {
     setSelectedPeriod(pcode);
+    const yr = parseInt(pcode.split('-')[0], 10);
+    if (!isNaN(yr) && yr !== selectedYear) {
+      setSelectedYear(yr);
+    }
     if (user?.role === 'ADMIN') {
       await refreshKsvCount(pcode);
+    }
+  };
+
+  const handleChangeYear = (newYear) => {
+    setSelectedYear(newYear);
+    const periodsInYear = periods.filter((p) => (p.year_num || parseInt(p.period_code.split('-')[0], 10)) === newYear);
+    if (periodsInYear.length > 0) {
+      const openP = periodsInYear.find((p) => p.status === 'ĐANG MỞ') || periodsInYear[0];
+      handleChangePeriod(openP.period_code);
+    } else {
+      handleChangePeriod(`${newYear}-01`);
     }
   };
 
@@ -306,6 +344,7 @@ export default function App() {
       case 'dataset_manager':
         return (
           <DatasetManagerView
+            selectedYear={selectedYear}
             onNavigate={handleNavigate}
             onSelectPeriod={handleChangePeriod}
             onReloadPeriods={() => loadAdminMetadata(selectedPeriod)}
@@ -313,9 +352,9 @@ export default function App() {
           />
         );
       case 'import_salary':
-        return <ImportSalaryView selectedPeriod={selectedPeriod} periods={periods} onNavigate={handleNavigate} notify={notify} />;
+        return <ImportSalaryView selectedPeriod={selectedPeriod} periods={periods} selectedYear={selectedYear} onNavigate={handleNavigate} notify={notify} />;
       case 'import_targets':
-        return <ImportTargetsView selectedPeriod={selectedPeriod} periods={periods} notify={notify} />;
+        return <ImportTargetsView selectedPeriod={selectedPeriod} periods={periods} selectedYear={selectedYear} notify={notify} />;
       case 'attendance':
         return <AttendanceView selectedPeriod={selectedPeriod} periods={periods} notify={notify} />;
       case 'execution':
@@ -355,18 +394,18 @@ export default function App() {
       case 'payroll_3p':
         return <Payroll3PView selectedPeriod={selectedPeriod} onNavigate={handleNavigate} notify={notify} />;
       case 'tich_luy_v3':
-        return <AccumulationV3View onNavigate={handleNavigate} notify={notify} />;
+        return <AccumulationV3View selectedYear={selectedYear} onNavigate={handleNavigate} notify={notify} />;
       case 'print_v2':
-        return <PrintReportsView selectedPeriod={selectedPeriod} initialTab="v2" notify={notify} />;
+        return <PrintReportsView selectedPeriod={selectedPeriod} selectedYear={selectedYear} initialTab="v2" notify={notify} onTabChange={(tabKey) => handleNavigate('print_reports', { tab: tabKey })} />;
       // Khối 4
       case 'payslip_admin':
-        return <PrintReportsView selectedPeriod={selectedPeriod} initialTab="payslip" initialEmpCode={printEmpCode} notify={notify} />;
+        return <PrintReportsView selectedPeriod={selectedPeriod} selectedYear={selectedYear} initialTab="payslip" initialEmpCode={printEmpCode} notify={notify} onTabChange={(tabKey) => handleNavigate('print_reports', { tab: tabKey })} />;
       case 'dashboard':
         return <DashboardView selectedPeriod={selectedPeriod} onNavigate={handleNavigate} notify={notify} />;
       case 'audit_log':
         return <AuditLogView notify={notify} />;
       case 'print_v3':
-        return <PrintReportsView selectedPeriod={selectedPeriod} initialTab="v3" notify={notify} />;
+        return <PrintReportsView selectedPeriod={selectedPeriod} selectedYear={selectedYear} initialTab="v3" notify={notify} onTabChange={(tabKey) => handleNavigate('print_reports', { tab: tabKey })} />;
       case 'db_explorer':
         return <DatabaseExplorerView notify={notify} />;
       default:
@@ -401,11 +440,16 @@ export default function App() {
         periods={user.role === 'ADMIN' ? periods : []}
         selectedPeriod={selectedPeriod}
         onChangePeriod={handleChangePeriod}
+        selectedYear={selectedYear}
+        onChangeYear={handleChangeYear}
+        availableYears={availableYears}
         ksvPendingCount={ksvPendingCount}
         onOpenChangePassword={() => setPwModalOpen(true)}
         onLogout={handleLogout}
       >
-        {user.role === 'ADMIN' ? renderAdminContent() : renderStaffContent()}
+        <Suspense fallback={<TableSkeleton />}>
+          {user.role === 'ADMIN' ? renderAdminContent() : renderStaffContent()}
+        </Suspense>
       </Layout>
 
       {/* Toast Notification */}
